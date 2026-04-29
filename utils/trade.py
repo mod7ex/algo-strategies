@@ -1,5 +1,7 @@
+import numpy as np
+
 class Trade:
-    def __init__(self, entry = 0.0, tp = 0.0, sl = 0.0, on = False, payload = None):
+    def __init__(self, entry = np.nan, tp = np.nan, sl = np.nan, on = False, payload = None):
         # Private variables
         self.__on = on
         self.__entry = entry
@@ -32,13 +34,13 @@ class Trade:
         """Getter for on."""
         return self.__on
     
-    # Computed properties
+    #------------------------------------- Computed properties
     @property
-    def is_buy(self):
+    def is_long(self):
         return self.__tp > self.__sl
     
     @property
-    def is_sell(self):
+    def is_short(self):
         return self.__tp < self.__sl
     
     @property
@@ -47,36 +49,36 @@ class Trade:
             return abs((self.tp - self.entry)/(self.sl - self.entry))
         else: return None
 
+    #------------------------------------- Setters
     @entry.setter
     def entry(self, value):
-        if isinstance(value, float | int):
-            if self.__on:
-                self.__entry = value
+        if isinstance(value, float, int):
+            self.__entry = value
         else:
             raise ValueError("Entry is invalid")
 
     @tp.setter
     def tp(self, value):
-        if isinstance(value, float | int):
-            if self.__on:
-                self.__tp = value
+        if isinstance(value, float, int):
+            self.__tp = value
         else:
             raise ValueError("TP is invalid")
 
     @sl.setter
     def sl(self, value):
-        if isinstance(value, float | int):
-            if self.__on:
-                self.__sl = value
+        if isinstance(value, float, int):
+            self.__sl = value
         else:
             raise ValueError("SL is invalid")
         
-    def On(self):
+    #------------------------------------- Methods
+    def activate(self):
         self.__on = True
+        return self
     
-    def Off(self):
-        self.__entry = 0
-        self.__tp = 0
-        self.__sl = 0
+    def clear(self):
+        self.__entry = np.nan
+        self.__tp = np.nan
+        self.__sl = np.nan
         self.__on = False
         self.__payload = None
