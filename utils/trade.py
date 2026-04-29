@@ -52,21 +52,21 @@ class Trade:
     #------------------------------------- Setters
     @entry.setter
     def entry(self, value):
-        if isinstance(value, float, int):
+        if isinstance(value, (float, int)):
             self.__entry = value
         else:
             raise ValueError("Entry is invalid")
 
     @tp.setter
     def tp(self, value):
-        if isinstance(value, float, int):
+        if isinstance(value, (float, int)):
             self.__tp = value
         else:
             raise ValueError("TP is invalid")
 
     @sl.setter
     def sl(self, value):
-        if isinstance(value, float, int):
+        if isinstance(value, (float, int)):
             self.__sl = value
         else:
             raise ValueError("SL is invalid")
