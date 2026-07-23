@@ -5,7 +5,7 @@
 //|   live lot size / open position monitoring.                     |
 //+------------------------------------------------------------------+
 #property copyright "HotkeyTrader"
-#property version   "1.00"
+#property version   "1.01"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -336,9 +336,18 @@ void DoBreakEven()
    UpdatePanelInfo();
   }
 
-
+//+------------------------------------------------------------------+
+//| Expert initialization                                            |
+//+------------------------------------------------------------------+
 int OnInit()
   {
+   // FIX: purge any stale panel objects left over from a previous run
+   // (e.g. EA removed without a clean deinit, or terminal closed/crashed
+   // while the panel was on the chart). Without this, MT5 can restore
+   // the saved chart layout - including old HKT_ objects - even after
+   // the EA is gone or the terminal is restarted.
+   ObjectsDeleteAll(0, PFX);
+
    g_vkBuy   = ResolveKey(InpKeyBuy,   g_letterBuy);
    g_vkSell  = ResolveKey(InpKeySell,  g_letterSell);
    g_vkClose = ResolveKey(InpKeyCloseAll, g_letterClose);
