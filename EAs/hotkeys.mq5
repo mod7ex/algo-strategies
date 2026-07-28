@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                HotkeyTrader.mq5   |
-//|   Hotkey trading panel EA (Buy Market / Sell Market / Close All) |
+//|   Hotkey trading panel EA (Long Market / Short Market / Flat All)|
 //|   Mimics a compact on-chart panel with keyboard shortcuts and    |
 //|   live lot size / open position monitoring.                     |
 //+------------------------------------------------------------------+
@@ -13,16 +13,16 @@
 //====================== INPUTS ======================================
 input group "=== Trading Settings ==="
 input double InpLotSize          = 0.01;      // Lot size for market orders
-input int    InpSlippagePoints   = 10;        // Slippage (points)
+input int    InpSlippagePoints   = 5;        // Slippage (points)
 input int    InpMagicNumber      = 202607;    // Magic number
 input bool   InpOnlyThisSymbol   = true;      // Manage only current chart symbol
 input bool   InpUseMagicFilter   = true;      // Only count/close positions with this Magic
 
 input group "=== Hotkeys (type a single letter) ==="
-input string InpKeyBuy           = "B";       // Buy hotkey
-input string InpKeySell          = "S";       // Sell hotkey
-input string InpKeyCloseAll      = "C";       // Close-all hotkey
-input string InpKeyBreakEven     = "E";       // Break-even hotkey (profitable positions only)
+input string InpKeyLong          = "L";       // Long hotkey
+input string InpKeyShort         = "S";       // Short hotkey
+input string InpKeyFlat          = "F";       // Flat (close all) hotkey
+input string InpKeyRiskFree      = "R";       // Risk Free hotkey (profitable positions only)
 
 input group "=== Panel Appearance ==="
 input int    InpPanelX           = 20;        // Panel X position (pixels)
@@ -30,10 +30,10 @@ input int    InpPanelY           = 20;        // Panel Y position (pixels)
 input color  InpPanelBgColor     = C'20,22,28';    // Panel background color
 input color  InpPanelBorderColor = C'60,120,200';  // Panel border color
 input color  InpTitleColor       = clrDodgerBlue;  // Title text color
-input color  InpBuyColor         = clrDeepSkyBlue; // Buy row color
-input color  InpSellColor        = clrTomato;      // Sell row color
-input color  InpCloseColor       = clrOrange;      // Close-all row color
-input color  InpBreakEvenColor   = clrYellowGreen;  // Break-even row color
+input color  InpLongColor        = clrDeepSkyBlue; // Long row color
+input color  InpShortColor       = clrTomato;      // Short row color
+input color  InpFlatColor        = clrOrange;      // Flat row color
+input color  InpRiskFreeColor    = clrYellowGreen;  // Risk Free row color
 input color  InpInfoColor        = clrSilver;      // Info text color
 input color  InpStatusColor      = clrLightGray;   // Status line color
 
@@ -45,8 +45,8 @@ string PFX = "HKT_";  // object name prefix, avoids collisions with other EAs
 string g_status = "Ready - press a key";
 
 // resolved from the string inputs at init time
-int    g_vkBuy, g_vkSell, g_vkClose, g_vkBreakEven;
-string g_letterBuy, g_letterSell, g_letterClose, g_letterBreakEven;
+int    g_vkLong, g_vkShort, g_vkFlat, g_vkRiskFree;
+string g_letterLong, g_letterShort, g_letterFlat, g_letterRiskFree;
 
 //+------------------------------------------------------------------+
 //| Convert a one-letter input string (e.g. "b") into a virtual-key  |
@@ -150,10 +150,10 @@ void BuildPanel()
 
    CreateLabel(PFX+"title", x+12, y+10, "HOTKEY TRADER", InpTitleColor, 10, "Consolas Bold");
 
-   CreateButton(PFX+"btnBuy",  x+10, y+34, w-20, rowH, "[ "+g_letterBuy +" ]   Buy Market",   InpBuyColor);
-   CreateButton(PFX+"btnSell", x+10, y+58, w-20, rowH, "[ "+g_letterSell+" ]   Sell Market",  InpSellColor);
-   CreateButton(PFX+"btnClose",x+10, y+82, w-20, rowH, "[ "+g_letterClose+" ]   Close All",InpCloseColor);
-   CreateButton(PFX+"btnBE",   x+10, y+106,w-20, rowH, "[ "+g_letterBreakEven+" ]   Break Even",InpBreakEvenColor);
+   CreateButton(PFX+"btnLong",    x+10, y+34, w-20, rowH, "[ "+g_letterLong    +" ]   Long Market",   InpLongColor);
+   CreateButton(PFX+"btnShort",   x+10, y+58, w-20, rowH, "[ "+g_letterShort   +" ]   Short Market",  InpShortColor);
+   CreateButton(PFX+"btnFlat",    x+10, y+82, w-20, rowH, "[ "+g_letterFlat    +" ]   Flat All",      InpFlatColor);
+   CreateButton(PFX+"btnRiskFree",x+10, y+106,w-20, rowH, "[ "+g_letterRiskFree+" ]   Risk Free",     InpRiskFreeColor);
 
    CreateLabel(PFX+"sep", x+10, y+134, StringRepeat("-", 26), clrGray, 8);
 
@@ -227,35 +227,35 @@ void UpdatePanelInfo()
 //+------------------------------------------------------------------+
 //| Trading actions                                                  |
 //+------------------------------------------------------------------+
-void DoBuy()
+void DoLong()
   {
    trade.SetExpertMagicNumber(InpMagicNumber);
    trade.SetDeviationInPoints(InpSlippagePoints);
    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 
-   if(trade.Buy(InpLotSize, _Symbol, price, 0, 0, "HotkeyTrader Buy"))
-      g_status = StringFormat("BUY %.2f @ %s executed", InpLotSize, DoubleToString(price,_Digits));
+   if(trade.Buy(InpLotSize, _Symbol, price, 0, 0, "HotkeyTrader Long"))
+      g_status = StringFormat("LONG %.2f @ %s executed", InpLotSize, DoubleToString(price,_Digits));
    else
-      g_status = StringFormat("BUY error: %d - %s", trade.ResultRetcode(), trade.ResultRetcodeDescription());
+      g_status = StringFormat("LONG error: %d - %s", trade.ResultRetcode(), trade.ResultRetcodeDescription());
 
    UpdatePanelInfo();
   }
 
-void DoSell()
+void DoShort()
   {
    trade.SetExpertMagicNumber(InpMagicNumber);
    trade.SetDeviationInPoints(InpSlippagePoints);
    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-   if(trade.Sell(InpLotSize, _Symbol, price, 0, 0, "HotkeyTrader Sell"))
-      g_status = StringFormat("SELL %.2f @ %s executed", InpLotSize, DoubleToString(price,_Digits));
+   if(trade.Sell(InpLotSize, _Symbol, price, 0, 0, "HotkeyTrader Short"))
+      g_status = StringFormat("SHORT %.2f @ %s executed", InpLotSize, DoubleToString(price,_Digits));
    else
-      g_status = StringFormat("SELL error: %d - %s", trade.ResultRetcode(), trade.ResultRetcodeDescription());
+      g_status = StringFormat("SHORT error: %d - %s", trade.ResultRetcode(), trade.ResultRetcodeDescription());
 
    UpdatePanelInfo();
   }
 
-void DoCloseAll()
+void DoFlat()
   {
    trade.SetExpertMagicNumber(InpMagicNumber);
    trade.SetDeviationInPoints(InpSlippagePoints);
@@ -281,14 +281,14 @@ void DoCloseAll()
      }
 
    if(failed==0)
-      g_status = StringFormat("Closed %d position(s)", closed);
+      g_status = StringFormat("Flattened %d position(s)", closed);
    else
-      g_status = StringFormat("Closed %d, failed %d", closed, failed);
+      g_status = StringFormat("Flat: %d closed, %d failed", closed, failed);
 
    UpdatePanelInfo();
   }
 
-void DoBreakEven()
+void DoRiskFree()
   {
    trade.SetExpertMagicNumber(InpMagicNumber);
 
@@ -318,7 +318,7 @@ void DoBreakEven()
       double currentTP  = PositionGetDouble(POSITION_TP);
       long   posType    = PositionGetInteger(POSITION_TYPE);
 
-      // Skip if SL is already at (or better than) breakeven
+      // Skip if SL is already at (or better than) risk-free (breakeven)
       if(posType==POSITION_TYPE_BUY  && currentSL >= openPrice && currentSL > 0) { skipped++; continue; }
       if(posType==POSITION_TYPE_SELL && currentSL <= openPrice && currentSL > 0) { skipped++; continue; }
 
@@ -329,9 +329,9 @@ void DoBreakEven()
      }
 
    if(failed==0)
-      g_status = StringFormat("Break-even set on %d position(s), %d skipped", moved, skipped);
+      g_status = StringFormat("Risk-free set on %d position(s), %d skipped", moved, skipped);
    else
-      g_status = StringFormat("BE: %d set, %d failed, %d skipped", moved, failed, skipped);
+      g_status = StringFormat("RF: %d set, %d failed, %d skipped", moved, failed, skipped);
 
    UpdatePanelInfo();
   }
@@ -348,10 +348,10 @@ int OnInit()
    // the EA is gone or the terminal is restarted.
    ObjectsDeleteAll(0, PFX);
 
-   g_vkBuy   = ResolveKey(InpKeyBuy,   g_letterBuy);
-   g_vkSell  = ResolveKey(InpKeySell,  g_letterSell);
-   g_vkClose = ResolveKey(InpKeyCloseAll, g_letterClose);
-   g_vkBreakEven = ResolveKey(InpKeyBreakEven, g_letterBreakEven);
+   g_vkLong     = ResolveKey(InpKeyLong,     g_letterLong);
+   g_vkShort    = ResolveKey(InpKeyShort,    g_letterShort);
+   g_vkFlat     = ResolveKey(InpKeyFlat,     g_letterFlat);
+   g_vkRiskFree = ResolveKey(InpKeyRiskFree, g_letterRiskFree);
 
    ChartSetInteger(0, CHART_EVENT_OBJECT_DELETE, true);
    BuildPanel();
@@ -377,7 +377,7 @@ void OnTick()
   }
 
 //+------------------------------------------------------------------+
-//| Timer - keep the panel numbers live                              |
+//| Timer - keep the panel numbers live                               |
 //+------------------------------------------------------------------+
 void OnTimer()
   {
@@ -393,33 +393,33 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
    if(id == CHARTEVENT_KEYDOWN)
      {
       int key = (int)lparam;
-      if(key == g_vkBuy)          DoBuy();
-      else if(key == g_vkSell)    DoSell();
-      else if(key == g_vkClose)   DoCloseAll();
-      else if(key == g_vkBreakEven) DoBreakEven();
+      if(key == g_vkLong)          DoLong();
+      else if(key == g_vkShort)    DoShort();
+      else if(key == g_vkFlat)     DoFlat();
+      else if(key == g_vkRiskFree) DoRiskFree();
      }
 
    // --- Button clicks (mouse) ---
    if(id == CHARTEVENT_OBJECT_CLICK)
      {
-      if(sparam == PFX+"btnBuy")
+      if(sparam == PFX+"btnLong")
         {
-         DoBuy();
+         DoLong();
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
         }
-      else if(sparam == PFX+"btnSell")
+      else if(sparam == PFX+"btnShort")
         {
-         DoSell();
+         DoShort();
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
         }
-      else if(sparam == PFX+"btnClose")
+      else if(sparam == PFX+"btnFlat")
         {
-         DoCloseAll();
+         DoFlat();
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
         }
-      else if(sparam == PFX+"btnBE")
+      else if(sparam == PFX+"btnRiskFree")
         {
-         DoBreakEven();
+         DoRiskFree();
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
         }
       ChartRedraw();
