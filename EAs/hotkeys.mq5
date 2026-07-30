@@ -3,9 +3,16 @@
 //|   Hotkey trading panel EA (Long Market / Short Market / Flat All)|
 //|   Mimics a compact on-chart panel with keyboard shortcuts and    |
 //|   live lot size / open position monitoring.                     |
+//|                                                                    |
+//|   NOTE: Position management (Flat/RiskFree/Hedge/stats) acts on  |
+//|   ALL open positions on the current chart symbol, regardless of  |
+//|   which terminal/device opened them (desktop, mobile, manual,    |
+//|   or another EA). The magic number is still stamped on NEW       |
+//|   orders sent by this EA, but it is no longer used as a filter   |
+//|   when selecting positions to close/modify/count.                |
 //+------------------------------------------------------------------+
 #property copyright "HotkeyTrader"
-#property version   "1.01"
+#property version   "1.02"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -13,16 +20,15 @@
 //====================== INPUTS ======================================
 input group "=== Trading Settings ==="
 input double InpLotSize          = 0.01;      // Lot size for market orders
-input int    InpSlippagePoints   = 5;        // Slippage (points)
-input int    InpMagicNumber      = 202607;    // Magic number
-input bool   InpOnlyThisSymbol   = true;      // Manage only current chart symbol
-input bool   InpUseMagicFilter   = true;      // Only count/close positions with this Magic
+input int    InpSlippagePoints   = 10;        // Slippage (points)
+input int    InpMagicNumber      = 202607;    // Magic number (stamped on new orders only)
 
 input group "=== Hotkeys (type a single letter) ==="
 input string InpKeyLong          = "L";       // Long hotkey
 input string InpKeyShort         = "S";       // Short hotkey
 input string InpKeyFlat          = "F";       // Flat (close all) hotkey
 input string InpKeyRiskFree      = "R";       // Risk Free hotkey (profitable positions only)
+input string InpKeyHedge         = "H";       // Hedge hotkey (opens one order for the net exposure)
 
 input group "=== Panel Appearance ==="
 input int    InpPanelX           = 20;        // Panel X position (pixels)
@@ -34,6 +40,7 @@ input color  InpLongColor        = clrDeepSkyBlue; // Long row color
 input color  InpShortColor       = clrTomato;      // Short row color
 input color  InpFlatColor        = clrOrange;      // Flat row color
 input color  InpRiskFreeColor    = clrYellowGreen;  // Risk Free row color
+input color  InpHedgeColor       = clrGold;         // Hedge row color
 input color  InpInfoColor        = clrSilver;      // Info text color
 input color  InpStatusColor      = clrLightGray;   // Status line color
 
@@ -45,8 +52,8 @@ string PFX = "HKT_";  // object name prefix, avoids collisions with other EAs
 string g_status = "Ready - press a key";
 
 // resolved from the string inputs at init time
-int    g_vkLong, g_vkShort, g_vkFlat, g_vkRiskFree;
-string g_letterLong, g_letterShort, g_letterFlat, g_letterRiskFree;
+int    g_vkLong, g_vkShort, g_vkFlat, g_vkRiskFree, g_vkHedge;
+string g_letterLong, g_letterShort, g_letterFlat, g_letterRiskFree, g_letterHedge;
 
 //+------------------------------------------------------------------+
 //| Convert a one-letter input string (e.g. "b") into a virtual-key  |
@@ -143,7 +150,7 @@ void BuildPanel()
    int x = InpPanelX;
    int y = InpPanelY;
    int w = 190;
-   int h = 216;
+   int h = 240;
    int rowH = 22;
 
    CreatePanelBg(PFX+"bg", x, y, w, h, InpPanelBgColor, InpPanelBorderColor);
@@ -154,13 +161,14 @@ void BuildPanel()
    CreateButton(PFX+"btnShort",   x+10, y+58, w-20, rowH, "[ "+g_letterShort   +" ]   Short Market",  InpShortColor);
    CreateButton(PFX+"btnFlat",    x+10, y+82, w-20, rowH, "[ "+g_letterFlat    +" ]   Flat All",      InpFlatColor);
    CreateButton(PFX+"btnRiskFree",x+10, y+106,w-20, rowH, "[ "+g_letterRiskFree+" ]   Risk Free",     InpRiskFreeColor);
+   CreateButton(PFX+"btnHedge",   x+10, y+130,w-20, rowH, "[ "+g_letterHedge   +" ]   Hedge",         InpHedgeColor);
 
-   CreateLabel(PFX+"sep", x+10, y+134, StringRepeat("-", 26), clrGray, 8);
+   CreateLabel(PFX+"sep", x+10, y+158, StringRepeat("-", 26), clrGray, 8);
 
-   CreateLabel(PFX+"lot",  x+12, y+148, "Lot: --",            InpInfoColor, 9);
-   CreateLabel(PFX+"pos",  x+12, y+166, "Open positions: --", InpInfoColor, 9);
+   CreateLabel(PFX+"lot",  x+12, y+172, "Lot: --",            InpInfoColor, 9);
+   CreateLabel(PFX+"pos",  x+12, y+190, "Open positions: --", InpInfoColor, 9);
 
-   CreateLabel(PFX+"status", x+12, y+190, g_status, InpStatusColor, 8);
+   CreateLabel(PFX+"status", x+12, y+214, g_status, InpStatusColor, 8);
 
    ChartRedraw();
   }
@@ -185,6 +193,18 @@ void DeletePanel()
   }
 
 //+------------------------------------------------------------------+
+//| Does the currently-selected position belong to this symbol?      |
+//| This is the ONLY filter applied when selecting positions to      |
+//| count/close/modify - it intentionally ignores magic number and   |
+//| origin (desktop, mobile, manual) so every position on the        |
+//| instrument you're trading (e.g. XAUUSD, EURUSD) is managed.      |
+//+------------------------------------------------------------------+
+bool PositionMatchesSymbol()
+  {
+   return (PositionGetString(POSITION_SYMBOL) == _Symbol);
+  }
+
+//+------------------------------------------------------------------+
 //| Count open positions and summed lot size                         |
 //+------------------------------------------------------------------+
 void GetPositionStats(int &count,double &lots)
@@ -197,15 +217,54 @@ void GetPositionStats(int &count,double &lots)
       ulong ticket = PositionGetTicket(i);
       if(ticket==0) continue;
       if(!PositionSelectByTicket(ticket)) continue;
-
-      if(InpOnlyThisSymbol && PositionGetString(POSITION_SYMBOL)!=_Symbol)
-         continue;
-      if(InpUseMagicFilter && PositionGetInteger(POSITION_MAGIC)!=InpMagicNumber)
-         continue;
+      if(!PositionMatchesSymbol()) continue;
 
       count++;
       lots += PositionGetDouble(POSITION_VOLUME);
      }
+  }
+
+//+------------------------------------------------------------------+
+//| Sum long lots vs short lots separately (for hedging)              |
+//+------------------------------------------------------------------+
+void GetNetExposure(double &longLots,double &shortLots)
+  {
+   longLots  = 0.0;
+   shortLots = 0.0;
+   int total = PositionsTotal();
+   for(int i=0;i<total;i++)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket==0) continue;
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(!PositionMatchesSymbol()) continue;
+
+      long posType = PositionGetInteger(POSITION_TYPE);
+      double vol   = PositionGetDouble(POSITION_VOLUME);
+
+      if(posType==POSITION_TYPE_BUY)
+         longLots += vol;
+      else if(posType==POSITION_TYPE_SELL)
+         shortLots += vol;
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Round/clamp a lot size to the symbol's volume step/min/max        |
+//+------------------------------------------------------------------+
+double NormalizeLots(double vol)
+  {
+   double step   = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   double minVol = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxVol = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+
+   if(step>0)
+      vol = MathRound(vol/step)*step;
+
+   if(vol<minVol) vol = minVol;
+   if(vol>maxVol) vol = maxVol;
+
+   return vol;
   }
 
 //+------------------------------------------------------------------+
@@ -268,11 +327,7 @@ void DoFlat()
       ulong ticket = PositionGetTicket(i);
       if(ticket==0) continue;
       if(!PositionSelectByTicket(ticket)) continue;
-
-      if(InpOnlyThisSymbol && PositionGetString(POSITION_SYMBOL)!=_Symbol)
-         continue;
-      if(InpUseMagicFilter && PositionGetInteger(POSITION_MAGIC)!=InpMagicNumber)
-         continue;
+      if(!PositionMatchesSymbol()) continue;
 
       if(trade.PositionClose(ticket))
          closed++;
@@ -300,11 +355,7 @@ void DoRiskFree()
       ulong ticket = PositionGetTicket(i);
       if(ticket==0) continue;
       if(!PositionSelectByTicket(ticket)) continue;
-
-      if(InpOnlyThisSymbol && PositionGetString(POSITION_SYMBOL)!=_Symbol)
-         continue;
-      if(InpUseMagicFilter && PositionGetInteger(POSITION_MAGIC)!=InpMagicNumber)
-         continue;
+      if(!PositionMatchesSymbol()) continue;
 
       double profit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
       if(profit <= 0)
@@ -336,6 +387,52 @@ void DoRiskFree()
    UpdatePanelInfo();
   }
 
+void DoHedge()
+  {
+   double longLots, shortLots;
+   GetNetExposure(longLots, shortLots);
+
+   double net  = longLots - shortLots;   // >0 = net long, <0 = net short
+   double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   double eps  = (step>0 ? step/2.0 : 0.0000001);
+
+   if(MathAbs(net) <= eps)
+     {
+      g_status = "Already hedged - net exposure is flat";
+      UpdatePanelInfo();
+      return;
+     }
+
+   trade.SetExpertMagicNumber(InpMagicNumber);
+   trade.SetDeviationInPoints(InpSlippagePoints);
+
+   double vol = NormalizeLots(MathAbs(net));
+   bool   ok;
+
+   if(net > 0)
+     {
+      // net long -> hedge by selling the net amount
+      double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      ok = trade.Sell(vol, _Symbol, price, 0, 0, "HotkeyTrader Hedge");
+      if(ok)
+         g_status = StringFormat("HEDGE: SELL %.2f @ %s (net long %.2f)", vol, DoubleToString(price,_Digits), net);
+      else
+         g_status = StringFormat("HEDGE error: %d - %s", trade.ResultRetcode(), trade.ResultRetcodeDescription());
+     }
+   else
+     {
+      // net short -> hedge by buying the net amount
+      double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      ok = trade.Buy(vol, _Symbol, price, 0, 0, "HotkeyTrader Hedge");
+      if(ok)
+         g_status = StringFormat("HEDGE: BUY %.2f @ %s (net short %.2f)", vol, DoubleToString(price,_Digits), -net);
+      else
+         g_status = StringFormat("HEDGE error: %d - %s", trade.ResultRetcode(), trade.ResultRetcodeDescription());
+     }
+
+   UpdatePanelInfo();
+  }
+
 //+------------------------------------------------------------------+
 //| Expert initialization                                            |
 //+------------------------------------------------------------------+
@@ -352,6 +449,7 @@ int OnInit()
    g_vkShort    = ResolveKey(InpKeyShort,    g_letterShort);
    g_vkFlat     = ResolveKey(InpKeyFlat,     g_letterFlat);
    g_vkRiskFree = ResolveKey(InpKeyRiskFree, g_letterRiskFree);
+   g_vkHedge    = ResolveKey(InpKeyHedge,    g_letterHedge);
 
    ChartSetInteger(0, CHART_EVENT_OBJECT_DELETE, true);
    BuildPanel();
@@ -397,6 +495,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       else if(key == g_vkShort)    DoShort();
       else if(key == g_vkFlat)     DoFlat();
       else if(key == g_vkRiskFree) DoRiskFree();
+      else if(key == g_vkHedge)    DoHedge();
      }
 
    // --- Button clicks (mouse) ---
@@ -420,6 +519,11 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       else if(sparam == PFX+"btnRiskFree")
         {
          DoRiskFree();
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+        }
+      else if(sparam == PFX+"btnHedge")
+        {
+         DoHedge();
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
         }
       ChartRedraw();
