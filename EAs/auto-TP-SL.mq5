@@ -29,8 +29,8 @@ enum ENUM_VALUE_TYPE
 input string Sep0 = "=========== Auto TPSL Settings ===========";  // ---
 input ENUM_TPSL_MODE   TPSL_Mode              = MODE_POSITION;    // TP/SL Mode
 input ENUM_VALUE_TYPE  ValueType              = VALUE_PERCENT;    // Value Type
-input double           TakeProfitValue        = 2.0;              // Take Profit Value (% of balance, or pips)
-input double           StopLossValue          = 1.0;              // Stop Loss Value (% of balance, or pips)
+input double           TakeProfitValue        = 100;              // Take Profit Value (% of balance, or pips)
+input double           StopLossValue          = 10;              // Stop Loss Value (% of balance, or pips)
 input bool             ApplyOnStartup         = true;              // Apply to Existing Orders on Startup
 
 input string Sep1 = "=========== SL Cover Settings ===========";   // ---
@@ -42,6 +42,12 @@ input string Sep2 = "=========== General Settings ===========";    // ---
 input ulong             MagicNumber           = 0;                 // Magic Number Filter (0 = manage all)
 input int                Slippage             = 10;                // Slippage (points)
 
+input string Sep3 = "=========== On/Off Button Settings ==========="; // ---
+input bool               StartEnabled         = false;              // EA Enabled at Startup
+input int                ButtonX               = 10;                // Button X Position (px)
+input int                ButtonY               = 10;                // Button Y Position (px)
+input ENUM_BASE_CORNER   ButtonCorner          = CORNER_LEFT_UPPER;  // Button Corner
+
 //====================================================================
 // GLOBALS
 //====================================================================
@@ -49,6 +55,71 @@ CTrade trade;
 
 // Tracks tickets already handled so we can detect newly-opened positions
 ulong knownTickets[];
+
+// Master on/off switch (toggled via chart button)
+bool g_Enabled = true;
+
+// Prefix for every chart object this EA creates, so we can safely
+// find/purge our own objects without touching anything else on the chart.
+#define ATP_PREFIX   "ATPSL_"
+#define ATP_BTN_NAME (ATP_PREFIX + "ToggleBtn")
+
+//+------------------------------------------------------------------+
+//| Colors / labels for the toggle button                             |
+//+------------------------------------------------------------------+
+void UpdateToggleButtonVisual()
+  {
+   if(ObjectFind(0, ATP_BTN_NAME) < 0)
+      return;
+
+   if(g_Enabled)
+     {
+      ObjectSetString(0, ATP_BTN_NAME, OBJPROP_TEXT, "Auto TPSL: ON");
+      ObjectSetInteger(0, ATP_BTN_NAME, OBJPROP_BGCOLOR, clrForestGreen);
+      ObjectSetInteger(0, ATP_BTN_NAME, OBJPROP_COLOR, clrWhite);
+     }
+   else
+     {
+      ObjectSetString(0, ATP_BTN_NAME, OBJPROP_TEXT, "Auto TPSL: OFF");
+      ObjectSetInteger(0, ATP_BTN_NAME, OBJPROP_BGCOLOR, clrFireBrick);
+      ObjectSetInteger(0, ATP_BTN_NAME, OBJPROP_COLOR, clrWhite);
+     }
+
+   ChartRedraw(0);
+  }
+
+//+------------------------------------------------------------------+
+//| Creates the ON/OFF toggle button                                  |
+//+------------------------------------------------------------------+
+void CreateToggleButton()
+  {
+   if(ObjectFind(0, ATP_BTN_NAME) >= 0)
+      ObjectDelete(0, ATP_BTN_NAME);
+
+   ObjectCreate(0, ATP_BTN_NAME, OBJ_BUTTON, 0, 0, 0);
+   ObjectSetInteger(0, ATP_BTN_NAME, OBJPROP_CORNER, ButtonCorner);
+   ObjectSetInteger(0, ATP_BTN_NAME, OBJPROP_XDISTANCE, ButtonX);
+   ObjectSetInteger(0, ATP_BTN_NAME, OBJPROP_YDISTANCE, ButtonY);
+   ObjectSetInteger(0, ATP_BTN_NAME, OBJPROP_XSIZE, 140);
+   ObjectSetInteger(0, ATP_BTN_NAME, OBJPROP_YSIZE, 28);
+   ObjectSetInteger(0, ATP_BTN_NAME, OBJPROP_FONTSIZE, 9);
+   ObjectSetString(0, ATP_BTN_NAME, OBJPROP_FONT, "Arial Bold");
+   ObjectSetInteger(0, ATP_BTN_NAME, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, ATP_BTN_NAME, OBJPROP_SELECTED, false);
+   ObjectSetInteger(0, ATP_BTN_NAME, OBJPROP_HIDDEN, true);
+   ObjectSetInteger(0, ATP_BTN_NAME, OBJPROP_ZORDER, 100);
+   ObjectSetInteger(0, ATP_BTN_NAME, OBJPROP_STATE, false); // keep un-pressed visually
+
+   UpdateToggleButtonVisual();
+  }
+
+//+------------------------------------------------------------------+
+//| Removes every chart object this EA owns                           |
+//+------------------------------------------------------------------+
+void PurgeOwnObjects()
+  {
+   ObjectsDeleteAll(0, ATP_PREFIX);
+  }
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                    |
@@ -58,10 +129,17 @@ int OnInit()
    trade.SetDeviationInPoints(Slippage);
    trade.SetTypeFillingBySymbol(_Symbol);
 
+   // Purge any stale objects left behind by a previous run (MT5 can persist
+   // chart objects across EA removal / terminal restarts).
+   PurgeOwnObjects();
+
+   g_Enabled = StartEnabled;
+   CreateToggleButton();
+
    ArrayResize(knownTickets, 0);
 
    // Snapshot current tickets so we don't treat them as "new" unless requested
-   if(ApplyOnStartup)
+   if(ApplyOnStartup && g_Enabled)
      {
       ApplyToAllExistingPositions();
      }
@@ -69,7 +147,8 @@ int OnInit()
    RefreshKnownTickets();
 
    Print("Auto TPSL EA initialized. Mode=", EnumToString(TPSL_Mode),
-         " ValueType=", EnumToString(ValueType));
+         " ValueType=", EnumToString(ValueType),
+         " Enabled=", g_Enabled);
 
    return(INIT_SUCCEEDED);
   }
@@ -79,6 +158,38 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
+   PurgeOwnObjects();
+  }
+
+//+------------------------------------------------------------------+
+//| Chart event handler - handles the ON/OFF button click             |
+//+------------------------------------------------------------------+
+void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
+  {
+   if(id != CHARTEVENT_OBJECT_CLICK)
+      return;
+
+   if(sparam != ATP_BTN_NAME)
+      return;
+
+   g_Enabled = !g_Enabled;
+
+   // Reset the button's pressed state so it doesn't stay "stuck down"
+   ObjectSetInteger(0, ATP_BTN_NAME, OBJPROP_STATE, false);
+   UpdateToggleButtonVisual();
+
+   Print("Auto TPSL EA ", (g_Enabled ? "ENABLED" : "DISABLED"), " via chart button.");
+
+   if(g_Enabled)
+     {
+      // Turning back on: apply TP/SL to whatever is currently open right
+      // away, instead of waiting for the next new position to trigger it.
+      ApplyToAllExistingPositions();
+     }
+
+   // Resync ticket tracking so re-enabling doesn't treat all open
+   // positions as "new" and blast them all with TP/SL modify requests.
+   RefreshKnownTickets();
   }
 
 //+------------------------------------------------------------------+
@@ -86,6 +197,15 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
   {
+   if(!g_Enabled)
+     {
+      // Keep the ticket snapshot in sync even while paused, so toggling
+      // back on doesn't misfire on positions that opened/closed meanwhile.
+      if(PositionsTotal() != ArraySize(knownTickets))
+         RefreshKnownTickets();
+      return;
+     }
+
    ProcessNewPositions();
 
    if(EnableSLCover)

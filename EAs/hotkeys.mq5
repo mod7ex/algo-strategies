@@ -12,14 +12,14 @@
 //|   when selecting positions to close/modify/count.                |
 //+------------------------------------------------------------------+
 #property copyright "HotkeyTrader"
-#property version   "1.02"
+#property version   "1.03"
 #property strict
 
 #include <Trade\Trade.mqh>
 
 //====================== INPUTS ======================================
 input group "=== Trading Settings ==="
-input double InpLotSize          = 0.01;      // Lot size for market orders
+input double InpLotSize          = 0.01;      // Starting lot size (editable live in the panel)
 input int    InpSlippagePoints   = 10;        // Slippage (points)
 input int    InpMagicNumber      = 202607;    // Magic number (stamped on new orders only)
 
@@ -43,6 +43,8 @@ input color  InpRiskFreeColor    = clrYellowGreen;  // Risk Free row color
 input color  InpHedgeColor       = clrGold;         // Hedge row color
 input color  InpInfoColor        = clrSilver;      // Info text color
 input color  InpStatusColor      = clrLightGray;   // Status line color
+input color  InpEditBgColor      = clrBlack;        // Lot size edit box background
+input color  InpEditTextColor    = clrWhite;        // Lot size edit box text color
 
 //====================== GLOBALS ======================================
 CTrade trade;
@@ -50,6 +52,9 @@ CTrade trade;
 string PFX = "HKT_";  // object name prefix, avoids collisions with other EAs
 
 string g_status = "Ready - press a key";
+
+// live-editable lot size, seeded from InpLotSize at init, changed via the panel edit box
+double g_lotSize;
 
 // resolved from the string inputs at init time
 int    g_vkLong, g_vkShort, g_vkFlat, g_vkRiskFree, g_vkHedge;
@@ -76,6 +81,25 @@ int ResolveKey(string rawKey,string &displayLetter)
    displayLetter = s;
    ushort ch = StringGetCharacter(s,0);
    return (int)ch;
+  }
+
+//+------------------------------------------------------------------+
+//| Number of decimal digits implied by the symbol's volume step     |
+//| (e.g. step 0.01 -> 2 digits, step 0.001 -> 3 digits)              |
+//+------------------------------------------------------------------+
+int LotDigits()
+  {
+   double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(step<=0) return 2;
+
+   int digits = 0;
+   double v = step;
+   while(v < 0.999999 && digits < 6)
+     {
+      v *= 10;
+      digits++;
+     }
+   return digits;
   }
 
 //+------------------------------------------------------------------+
@@ -143,6 +167,31 @@ void CreateButton(string name,int x,int y,int w,int h,string text,color txtClr)
   }
 
 //+------------------------------------------------------------------+
+//| Helper: create an editable lot-size text box                     |
+//+------------------------------------------------------------------+
+void CreateEdit(string name,int x,int y,int w,int h,string text,color txtClr,color bgClr)
+  {
+   if(ObjectFind(0,name)<0)
+      ObjectCreate(0,name,OBJ_EDIT,0,0,0);
+   ObjectSetInteger(0,name,OBJPROP_XDISTANCE,x);
+   ObjectSetInteger(0,name,OBJPROP_YDISTANCE,y);
+   ObjectSetInteger(0,name,OBJPROP_XSIZE,w);
+   ObjectSetInteger(0,name,OBJPROP_YSIZE,h);
+   ObjectSetInteger(0,name,OBJPROP_CORNER,CORNER_LEFT_UPPER);
+   ObjectSetString(0,name,OBJPROP_TEXT,text);
+   ObjectSetString(0,name,OBJPROP_FONT,"Consolas");
+   ObjectSetInteger(0,name,OBJPROP_FONTSIZE,9);
+   ObjectSetInteger(0,name,OBJPROP_COLOR,txtClr);
+   ObjectSetInteger(0,name,OBJPROP_BGCOLOR,bgClr);
+   ObjectSetInteger(0,name,OBJPROP_BORDER_COLOR,InpPanelBorderColor);
+   ObjectSetInteger(0,name,OBJPROP_ALIGN,ALIGN_CENTER);
+   ObjectSetInteger(0,name,OBJPROP_READONLY,false);
+   ObjectSetInteger(0,name,OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,name,OBJPROP_HIDDEN,true);
+   ObjectSetInteger(0,name,OBJPROP_ZORDER,10);
+  }
+
+//+------------------------------------------------------------------+
 //| Build the whole panel                                            |
 //+------------------------------------------------------------------+
 void BuildPanel()
@@ -165,10 +214,13 @@ void BuildPanel()
 
    CreateLabel(PFX+"sep", x+10, y+158, StringRepeat("-", 26), clrGray, 8);
 
-   CreateLabel(PFX+"lot",  x+12, y+172, "Lot: --",            InpInfoColor, 9);
-   CreateLabel(PFX+"pos",  x+12, y+190, "Open positions: --", InpInfoColor, 9);
+   // Editable lot size field (double-click to type a new value, press Enter to confirm)
+   CreateLabel(PFX+"lotLabel", x+12, y+173, "Lot Size:", InpInfoColor, 9);
+   CreateEdit(PFX+"lotEdit", x+92, y+169, 86, 18, DoubleToString(g_lotSize, LotDigits()), InpEditTextColor, InpEditBgColor);
 
-   CreateLabel(PFX+"status", x+12, y+214, g_status, InpStatusColor, 8);
+   CreateLabel(PFX+"pos",  x+12, y+196, "Open positions: --", InpInfoColor, 9);
+
+   CreateLabel(PFX+"status", x+12, y+218, g_status, InpStatusColor, 8);
 
    ChartRedraw();
   }
@@ -275,12 +327,34 @@ void UpdatePanelInfo()
    int count; double lots;
    GetPositionStats(count, lots);
 
-   string lotTxt = StringFormat("Lot: %.2f", InpLotSize);
+   // NOTE: the lot-size edit box is intentionally NOT rewritten here on
+   // every timer tick - only on init and after the user confirms an edit -
+   // so typing into it isn't clobbered by the 1-second refresh.
    string posTxt = StringFormat("Open positions: %d", count);
-   ObjectSetString(0, PFX+"lot", OBJPROP_TEXT, lotTxt);
    ObjectSetString(0, PFX+"pos", OBJPROP_TEXT, posTxt);
    ObjectSetString(0, PFX+"status", OBJPROP_TEXT, g_status);
    ChartRedraw();
+  }
+
+//+------------------------------------------------------------------+
+//| Read the lot-size edit box, validate/normalize it, and apply it  |
+//+------------------------------------------------------------------+
+void ApplyLotEdit()
+  {
+   string txt = ObjectGetString(0, PFX+"lotEdit", OBJPROP_TEXT);
+   double val = StringToDouble(txt);
+
+   if(val <= 0)
+      g_status = "Invalid lot size entered - keeping previous value";
+   else
+     {
+      g_lotSize = NormalizeLots(val);
+      g_status  = StringFormat("Lot size set to %s", DoubleToString(g_lotSize, LotDigits()));
+     }
+
+   // reflect the normalized value back into the box either way
+   ObjectSetString(0, PFX+"lotEdit", OBJPROP_TEXT, DoubleToString(g_lotSize, LotDigits()));
+   UpdatePanelInfo();
   }
 
 //+------------------------------------------------------------------+
@@ -292,8 +366,8 @@ void DoLong()
    trade.SetDeviationInPoints(InpSlippagePoints);
    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 
-   if(trade.Buy(InpLotSize, _Symbol, price, 0, 0, "HotkeyTrader Long"))
-      g_status = StringFormat("LONG %.2f @ %s executed", InpLotSize, DoubleToString(price,_Digits));
+   if(trade.Buy(g_lotSize, _Symbol, price, 0, 0, "HotkeyTrader Long"))
+      g_status = StringFormat("LONG %s @ %s executed", DoubleToString(g_lotSize,LotDigits()), DoubleToString(price,_Digits));
    else
       g_status = StringFormat("LONG error: %d - %s", trade.ResultRetcode(), trade.ResultRetcodeDescription());
 
@@ -306,8 +380,8 @@ void DoShort()
    trade.SetDeviationInPoints(InpSlippagePoints);
    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-   if(trade.Sell(InpLotSize, _Symbol, price, 0, 0, "HotkeyTrader Short"))
-      g_status = StringFormat("SHORT %.2f @ %s executed", InpLotSize, DoubleToString(price,_Digits));
+   if(trade.Sell(g_lotSize, _Symbol, price, 0, 0, "HotkeyTrader Short"))
+      g_status = StringFormat("SHORT %s @ %s executed", DoubleToString(g_lotSize,LotDigits()), DoubleToString(price,_Digits));
    else
       g_status = StringFormat("SHORT error: %d - %s", trade.ResultRetcode(), trade.ResultRetcodeDescription());
 
@@ -451,6 +525,8 @@ int OnInit()
    g_vkRiskFree = ResolveKey(InpKeyRiskFree, g_letterRiskFree);
    g_vkHedge    = ResolveKey(InpKeyHedge,    g_letterHedge);
 
+   g_lotSize = NormalizeLots(InpLotSize);
+
    ChartSetInteger(0, CHART_EVENT_OBJECT_DELETE, true);
    BuildPanel();
    UpdatePanelInfo();
@@ -527,6 +603,13 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
         }
       ChartRedraw();
+     }
+
+   // --- Lot size edit box: fires when the user presses Enter or the box loses focus ---
+   if(id == CHARTEVENT_OBJECT_ENDEDIT)
+     {
+      if(sparam == PFX+"lotEdit")
+         ApplyLotEdit();
      }
   }
 //+------------------------------------------------------------------+
