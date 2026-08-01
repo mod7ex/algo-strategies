@@ -20,7 +20,7 @@
 //====================== INPUTS ======================================
 input group "=== Trading Settings ==="
 input double InpLotSize          = 0.01;      // Starting lot size (editable live in the panel)
-input int    InpSlippagePoints   = 5;        // Slippage (points)
+input int    InpSlippagePoints   = 5;         // Slippage (points)
 input int    InpMagicNumber      = 202607;    // Magic number (stamped on new orders only)
 
 input group "=== Hotkeys (type a single letter) ==="
@@ -31,18 +31,18 @@ input string InpKeyRiskFree      = "R";       // Risk Free hotkey (profitable po
 input string InpKeyHedge         = "H";       // Hedge hotkey (opens one order for the net exposure)
 
 input group "=== Panel Appearance ==="
-input int    InpPanelX           = 20;        // Panel X position (pixels)
-input int    InpPanelY           = 20;        // Panel Y position (pixels)
-input color  InpPanelBgColor     = C'20,22,28';    // Panel background color
-input color  InpPanelBorderColor = C'60,120,200';  // Panel border color
-input color  InpTitleColor       = clrDodgerBlue;  // Title text color
-input color  InpLongColor        = clrDeepSkyBlue; // Long row color
-input color  InpShortColor       = clrTomato;      // Short row color
-input color  InpFlatColor        = clrOrange;      // Flat row color
+input int    InpPanelX           = 10;              // Panel X position (pixels)
+input int    InpPanelY           = 10;              // Panel Y position (pixels)
+input color  InpPanelBgColor     = C'20,22,28';     // Panel background color
+input color  InpPanelBorderColor = C'60,120,200';   // Panel border color
+input color  InpTitleColor       = clrDodgerBlue;   // Title text color
+input color  InpLongColor        = clrDeepSkyBlue;  // Long row color
+input color  InpShortColor       = clrTomato;       // Short row color
+input color  InpFlatColor        = clrOrange;       // Flat row color
 input color  InpRiskFreeColor    = clrYellowGreen;  // Risk Free row color
 input color  InpHedgeColor       = clrGold;         // Hedge row color
-input color  InpInfoColor        = clrSilver;      // Info text color
-input color  InpStatusColor      = clrLightGray;   // Status line color
+input color  InpInfoColor        = clrSilver;       // Info text color
+input color  InpStatusColor      = clrLightGray;    // Status line color
 input color  InpEditBgColor      = clrBlack;        // Lot size edit box background
 input color  InpEditTextColor    = clrWhite;        // Lot size edit box text color
 

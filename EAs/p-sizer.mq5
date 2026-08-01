@@ -471,6 +471,10 @@ void BuildLines()
    CreateTextBg(BgTP(),tagBg);
    CreatePriceText(TxtTP(),    g_tpPrice,    clrLimeGreen);
 
+   // force a redraw so the chart's internal time/price->pixel mapping is
+   // up to date before we measure pixel positions for the backgrounds
+   ChartRedraw(0);
+
    PositionTextBg(BgEntry(),TxtEntry(),g_entryPrice);
    PositionTextBg(BgSL(),TxtSL(),g_slPrice);
    PositionTextBg(BgTP(),TxtTP(),g_tpPrice);
@@ -576,6 +580,12 @@ void UpdatePriceTags()
    MovePriceText(TxtEntry(),g_entryPrice);
    MovePriceText(TxtSL(),g_slPrice);
    MovePriceText(TxtTP(),g_tpPrice);
+
+   // force a redraw so the time/price->pixel mapping reflects the moved
+   // lines/text and any chart rescale before we measure pixel positions -
+   // otherwise the background rectangles compute against stale geometry
+   // and visibly lag behind the line/text they're supposed to sit under
+   ChartRedraw(0);
 
    PositionTextBg(BgEntry(),TxtEntry(),g_entryPrice);
    PositionTextBg(BgSL(),TxtSL(),g_slPrice);
@@ -696,6 +706,12 @@ void SyncAll()
       MoveLine(LineEntry(),g_entryPrice);
       MoveLine(LineSL(),g_slPrice);
       MoveLine(LineTP(),g_tpPrice);
+      // let the chart's internal geometry (and any auto-rescale triggered
+      // by these new prices) settle BEFORE UpdatePriceTags() measures pixel
+      // positions for the label backgrounds - otherwise the backgrounds
+      // are positioned against stale geometry and visibly lag behind the
+      // lines/text while dragging
+      ChartRedraw(0);
      }
 
    RefreshEdits();
@@ -876,6 +892,21 @@ void OnTick()
 //--------------------------------------------------------------------
 void OnChartEvent(const int id,const long &lparam,const double &dparam,const string &sparam)
   {
+   // Fired on resize, scroll, zoom, and other geometry changes - including
+   // while the market is closed and no ticks are coming in. Without this,
+   // the price-tag background rectangles (which are pixel-anchored, unlike
+   // the time/price-anchored line/text objects) never get repositioned
+   // after a resize when there's no tick to trigger OnTick()'s refresh.
+   if(id==CHARTEVENT_CHART_CHANGE)
+     {
+      if(g_linesExist)
+        {
+         UpdatePriceTags();
+         ChartRedraw(0);
+        }
+      return;
+     }
+
    if(id==CHARTEVENT_OBJECT_DRAG)
      {
       // Entry line is locked (not selectable) for market orders, so this
