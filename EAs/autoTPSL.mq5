@@ -20,32 +20,33 @@ enum ENUM_TPSL_MODE
 enum ENUM_VALUE_TYPE
   {
    VALUE_PERCENT = 0,      // Percentage of account BALANCE (money-based)
-   VALUE_PIPS    = 1       // Fixed pips
+   VALUE_PIPS    = 1,      // Fixed pips
+   VALUE_MONEY   = 2       // Fixed amount of money (account currency)
   };
 
 //====================================================================
 // INPUTS
 //====================================================================
 input string Sep0 = "=========== Auto TPSL Settings ===========";  // ---
-input ENUM_TPSL_MODE   TPSL_Mode              = MODE_POSITION;    // TP/SL Mode
-input ENUM_VALUE_TYPE  ValueType              = VALUE_PERCENT;    // Value Type
-input double           TakeProfitValue        = 100;              // Take Profit Value (% of balance, or pips)
-input double           StopLossValue          = 10;              // Stop Loss Value (% of balance, or pips)
-input bool             ApplyOnStartup         = true;              // Apply to Existing Orders on Startup
+input ENUM_TPSL_MODE    TPSL_Mode              = MODE_POSITION;    // TP/SL Mode
+input ENUM_VALUE_TYPE   ValueType              = VALUE_MONEY;    // Value Type
+input double            TakeProfitValue        = 30;              // Take Profit Value (%, pips, or money)
+input double            StopLossValue          = 10;               // Stop Loss Value (%, pips, or money)
+input bool              ApplyOnStartup         = true;             // Apply to Existing Orders on Startup
 
 input string Sep1 = "=========== SL Cover Settings ===========";   // ---
 input bool              EnableSLCover         = true;              // Enable SL Cover Feature
-input double            CoverProfitThreshold  = 0.5;               // Cover When Profit Reaches (%)
-input double            CoverSLValue          = 0.1;               // Cover SL Value (%)
+input double            CoverProfitThreshold  = 50;               // Cover When Profit Reaches (%)
+input double            CoverSLValue          = 0;               // Cover SL Value (%)
 
 input string Sep2 = "=========== General Settings ===========";    // ---
 input ulong             MagicNumber           = 0;                 // Magic Number Filter (0 = manage all)
-input int                Slippage             = 10;                // Slippage (points)
+input int               Slippage             = 5;                 // Slippage (points)
 
 input string Sep3 = "=========== On/Off Button Settings ==========="; // ---
-input bool               StartEnabled         = false;              // EA Enabled at Startup
-input int                ButtonX               = 10;                // Button X Position (px)
-input int                ButtonY               = 10;                // Button Y Position (px)
+input bool               StartEnabled         = false;                  // EA Enabled at Startup
+input int                ButtonX               = 10;                    // Button X Position (px)
+input int                ButtonY               = 10;                    // Button Y Position (px)
 input ENUM_BASE_CORNER   ButtonCorner          = CORNER_LEFT_UPPER;  // Button Corner
 
 //====================================================================
@@ -326,6 +327,15 @@ void CalculateTPSL(const string symbol, double entryPrice, double volume, bool i
          tpDist = MoneyToPriceDistance(symbol, balance * (TakeProfitValue / 100.0), volume);
       if(StopLossValue > 0)
          slDist = MoneyToPriceDistance(symbol, balance * (StopLossValue / 100.0), volume);
+     }
+   else if(ValueType == VALUE_MONEY)
+     {
+      // Fixed amount of account-currency money, converted into a price
+      // distance using the position's (combined) volume.
+      if(TakeProfitValue > 0)
+         tpDist = MoneyToPriceDistance(symbol, TakeProfitValue, volume);
+      if(StopLossValue > 0)
+         slDist = MoneyToPriceDistance(symbol, StopLossValue, volume);
      }
    else // VALUE_PIPS
      {

@@ -12,7 +12,7 @@
 //|   when selecting positions to close/modify/count.                |
 //+------------------------------------------------------------------+
 #property copyright "HotkeyTrader"
-#property version   "1.03"
+#property version   "1.00"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -20,7 +20,7 @@
 //====================== INPUTS ======================================
 input group "=== Trading Settings ==="
 input double InpLotSize          = 0.01;      // Starting lot size (editable live in the panel)
-input int    InpSlippagePoints   = 10;        // Slippage (points)
+input int    InpSlippagePoints   = 5;        // Slippage (points)
 input int    InpMagicNumber      = 202607;    // Magic number (stamped on new orders only)
 
 input group "=== Hotkeys (type a single letter) ==="
