@@ -22,6 +22,7 @@ input group "=== Trading Settings ==="
 input double InpLotSize          = 0.01;      // Starting lot size (editable live in the panel)
 input int    InpSlippagePoints   = 5;         // Slippage (points)
 input int    InpMagicNumber      = 202607;    // Magic number (stamped on new orders only)
+input double InpMaxOpenLots      = 0.05;       // Max open size in one direction (0 = unlimited)
 
 input group "=== Hotkeys (type a single letter) ==="
 input string InpKeyLong          = "L";       // Long hotkey
@@ -199,7 +200,7 @@ void BuildPanel()
    int x = InpPanelX;
    int y = InpPanelY;
    int w = 190;
-   int h = 240;
+   int h = 258;
    int rowH = 22;
 
    CreatePanelBg(PFX+"bg", x, y, w, h, InpPanelBgColor, InpPanelBorderColor);
@@ -218,11 +219,24 @@ void BuildPanel()
    CreateLabel(PFX+"lotLabel", x+12, y+173, "Lot Size:", InpInfoColor, 9);
    CreateEdit(PFX+"lotEdit", x+92, y+169, 86, 18, DoubleToString(g_lotSize, LotDigits()), InpEditTextColor, InpEditBgColor);
 
-   CreateLabel(PFX+"pos",  x+12, y+196, "Open positions: --", InpInfoColor, 9);
+   // Max open size in one direction (read-only display of the input)
+   CreateLabel(PFX+"maxLabel", x+12, y+193, MaxOpenLotsText(), InpInfoColor, 9);
 
-   CreateLabel(PFX+"status", x+12, y+218, g_status, InpStatusColor, 8);
+   CreateLabel(PFX+"pos",  x+12, y+213, "Open positions: --", InpInfoColor, 9);
+
+   CreateLabel(PFX+"status", x+12, y+235, g_status, InpStatusColor, 8);
 
    ChartRedraw();
+  }
+
+//+------------------------------------------------------------------+
+//| Text for the "Max/Dir" display field                             |
+//+------------------------------------------------------------------+
+string MaxOpenLotsText()
+  {
+   if(InpMaxOpenLots <= 0)
+      return "Max/Dir: Unlimited";
+   return StringFormat("Max/Dir: %s lots", DoubleToString(InpMaxOpenLots, LotDigits()));
   }
 
 //+------------------------------------------------------------------+
@@ -277,7 +291,8 @@ void GetPositionStats(int &count,double &lots)
   }
 
 //+------------------------------------------------------------------+
-//| Sum long lots vs short lots separately (for hedging)              |
+//| Sum long lots vs short lots separately (for hedging and the      |
+//| max-open-size-in-one-direction cap)                               |
 //+------------------------------------------------------------------+
 void GetNetExposure(double &longLots,double &shortLots)
   {
@@ -320,6 +335,32 @@ double NormalizeLots(double vol)
   }
 
 //+------------------------------------------------------------------+
+//| Given the lot size the panel wants to send and the current NET   |
+//| exposure (longLots - shortLots), return how much of the request  |
+//| is allowed under InpMaxOpenLots (0 = unlimited), where the cap   |
+//| applies to net long / net short - not gross lots in that         |
+//| direction. E.g. 0.05 long + 0.02 short = net long 0.03; with a   |
+//| cap of 0.05 you still have 0.02 of room to go further long.      |
+//| isLong=true checks the cap on net long, false checks net short.  |
+//| allowed <= 0 means the net cap is already reached/exceeded.       |
+//+------------------------------------------------------------------+
+double ClampToMaxOpen(double requestedVol,double netExposure,bool isLong)
+  {
+   if(InpMaxOpenLots <= 0)
+      return requestedVol; // unlimited
+
+   // Buying moves net exposure up (more long); selling moves it down (more short).
+   // Room is how much you can move in that direction before hitting +/-InpMaxOpenLots.
+   double room = isLong ? (InpMaxOpenLots - netExposure) : (InpMaxOpenLots + netExposure);
+
+   if(room <= 0)
+      return 0.0;
+
+   double allowed = MathMin(requestedVol, room);
+   return NormalizeLots(allowed);
+  }
+
+//+------------------------------------------------------------------+
 //| Refresh the info / status labels                                 |
 //+------------------------------------------------------------------+
 void UpdatePanelInfo()
@@ -332,6 +373,7 @@ void UpdatePanelInfo()
    // so typing into it isn't clobbered by the 1-second refresh.
    string posTxt = StringFormat("Open positions: %d", count);
    ObjectSetString(0, PFX+"pos", OBJPROP_TEXT, posTxt);
+   ObjectSetString(0, PFX+"maxLabel", OBJPROP_TEXT, MaxOpenLotsText());
    ObjectSetString(0, PFX+"status", OBJPROP_TEXT, g_status);
    ChartRedraw();
   }
@@ -362,12 +404,29 @@ void ApplyLotEdit()
 //+------------------------------------------------------------------+
 void DoLong()
   {
+   double longLots, shortLots;
+   GetNetExposure(longLots, shortLots);
+   double net = longLots - shortLots;
+
+   double vol = ClampToMaxOpen(g_lotSize, net, true);
+   if(vol <= 0)
+     {
+      g_status = StringFormat("LONG blocked - net long already at max (%s)", DoubleToString(InpMaxOpenLots, LotDigits()));
+      UpdatePanelInfo();
+      return;
+     }
+
    trade.SetExpertMagicNumber(InpMagicNumber);
    trade.SetDeviationInPoints(InpSlippagePoints);
    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 
-   if(trade.Buy(g_lotSize, _Symbol, price, 0, 0, "HotkeyTrader Long"))
-      g_status = StringFormat("LONG %s @ %s executed", DoubleToString(g_lotSize,LotDigits()), DoubleToString(price,_Digits));
+   if(trade.Buy(vol, _Symbol, price, 0, 0, "HotkeyTrader Long"))
+     {
+      if(vol < g_lotSize)
+         g_status = StringFormat("LONG %s @ %s executed (clamped by max/dir)", DoubleToString(vol,LotDigits()), DoubleToString(price,_Digits));
+      else
+         g_status = StringFormat("LONG %s @ %s executed", DoubleToString(vol,LotDigits()), DoubleToString(price,_Digits));
+     }
    else
       g_status = StringFormat("LONG error: %d - %s", trade.ResultRetcode(), trade.ResultRetcodeDescription());
 
@@ -376,12 +435,29 @@ void DoLong()
 
 void DoShort()
   {
+   double longLots, shortLots;
+   GetNetExposure(longLots, shortLots);
+   double net = longLots - shortLots;
+
+   double vol = ClampToMaxOpen(g_lotSize, net, false);
+   if(vol <= 0)
+     {
+      g_status = StringFormat("SHORT blocked - net short already at max (%s)", DoubleToString(InpMaxOpenLots, LotDigits()));
+      UpdatePanelInfo();
+      return;
+     }
+
    trade.SetExpertMagicNumber(InpMagicNumber);
    trade.SetDeviationInPoints(InpSlippagePoints);
    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-   if(trade.Sell(g_lotSize, _Symbol, price, 0, 0, "HotkeyTrader Short"))
-      g_status = StringFormat("SHORT %s @ %s executed", DoubleToString(g_lotSize,LotDigits()), DoubleToString(price,_Digits));
+   if(trade.Sell(vol, _Symbol, price, 0, 0, "HotkeyTrader Short"))
+     {
+      if(vol < g_lotSize)
+         g_status = StringFormat("SHORT %s @ %s executed (clamped by max/dir)", DoubleToString(vol,LotDigits()), DoubleToString(price,_Digits));
+      else
+         g_status = StringFormat("SHORT %s @ %s executed", DoubleToString(vol,LotDigits()), DoubleToString(price,_Digits));
+     }
    else
       g_status = StringFormat("SHORT error: %d - %s", trade.ResultRetcode(), trade.ResultRetcodeDescription());
 
