@@ -12,3 +12,7 @@ i want to study:
 1 - x$ is measured from a fixed reference, swing high or swing low
 2 - pullback get measured from the running extreme (MFE point)
 3 - stopping rule is when price continues another x$ without any r$ pullback 
+
+---
+
+GMT + ES_NQ correlation (pair trading)

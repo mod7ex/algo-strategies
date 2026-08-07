@@ -22,9 +22,9 @@ CTrade trade;
 input ulong  InpMagic            = 990011;
 input int    InpSlippagePoints   = 5;
 input string InpOrderComment     = "PositionSizerEA";
-input double InpDefaultSLPoints  = 5000;     // default SL distance on init
+input double InpDefaultSLPoints  = 2000;     // default SL distance on init
 input double InpDefaultRRR       = 1.0;     // default risk:reward ratio
-input double InpDefaultRiskValue = 50.0;    // default value in the risk box
+input double InpDefaultRiskValue = 10.0;    // default value in the risk box
 
 //--------------------------------------------------------------------
 // RISK MODES
