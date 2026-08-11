@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                        DailyCandleBreakout.mq5   |
+//|                                        CandleRange.mq5   |
 //|                                                                    |
 //|  Strategy:                                                        |
 //|   Each day, pick one "root" candle (a chosen timeframe + a        |
@@ -191,7 +191,7 @@ double CalcLots(double riskPriceDistance)
   }
 
 //+------------------------------------------------------------------+
-void PlaceDailyOrders(double rootHigh, double rootLow)
+void PlaceRangeOrders(double rootHigh, double rootLow)
   {
    double risk = rootHigh - rootLow;
    if(risk <= 0)
@@ -218,12 +218,12 @@ void PlaceDailyOrders(double rootHigh, double rootLow)
    double sellSL    = NormalizeDouble(rootHigh, digits);
    double sellTP    = NormalizeDouble(rootLow - InpRRR * risk, digits);
 
-   if(trade.BuyStop(lots, buyEntry, _Symbol, buySL, buyTP, ORDER_TIME_GTC, 0, "DailyCandleBreakout"))
+   if(trade.BuyStop(lots, buyEntry, _Symbol, buySL, buyTP, ORDER_TIME_GTC, 0, "CandleRange"))
       buyStopTicket = trade.ResultOrder();
    else
       Print("BuyStop failed: ", trade.ResultRetcodeDescription());
 
-   if(trade.SellStop(lots, sellEntry, _Symbol, sellSL, sellTP, ORDER_TIME_GTC, 0, "DailyCandleBreakout"))
+   if(trade.SellStop(lots, sellEntry, _Symbol, sellSL, sellTP, ORDER_TIME_GTC, 0, "CandleRange"))
       sellStopTicket = trade.ResultOrder();
    else
       Print("SellStop failed: ", trade.ResultRetcodeDescription());
@@ -262,7 +262,7 @@ void OnTick()
             double rootHigh = iHigh(_Symbol, InpTimeframe, 1);
             double rootLow  = iLow(_Symbol, InpTimeframe, 1);
 
-            PlaceDailyOrders(rootHigh, rootLow);
+            PlaceRangeOrders(rootHigh, rootLow);
            }
         }
      }
