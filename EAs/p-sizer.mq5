@@ -73,6 +73,21 @@ double   g_entryPrice, g_slPrice, g_tpPrice;
 bool     g_syncing   = false;   // guard against feedback loops
 bool     g_linesExist = false;  // lines only exist once an order type is picked
 
+bool     g_symListOpen   = false;   // symbol dropdown open/closed
+string   g_wlSymbols[];             // symbols currently in Market Watch (alphabetical)
+int      g_wlCount       = 0;
+int      g_symListOffset = 0;       // paging offset into g_wlSymbols while the dropdown is open
+
+// MT5 fires CHARTEVENT_OBJECT_CLICK for a button click AND a generic
+// CHARTEVENT_CLICK for the same physical click right after it. Without
+// this guard, opening the symbol dropdown from BtnSymbol()'s OBJECT_CLICK
+// handler gets immediately undone by the follow-up CHARTEVENT_CLICK
+// handler (which closes the dropdown on any "click elsewhere"), so the
+// popup appeared to never show up at all. Set true right after opening
+// the dropdown from the button handler; the next CHARTEVENT_CLICK consumes
+// it and is ignored instead of closing what was just opened.
+bool     g_suppressChartClick = false;
+
 // z-order: panel controls must sit ABOVE the price lines or clicks on the
 // panel get intercepted by an OBJ_HLINE crossing underneath it.
 #define ZORDER_LINE  1
@@ -81,10 +96,31 @@ bool     g_linesExist = false;  // lines only exist once an order type is picked
 #define ZORDER_LABEL 20
 #define ZORDER_CTRL  50
 
+// panel geometry - pulled out to constants so the symbol-dropdown builder
+// (which lives outside BuildPanel) can position itself relative to the
+// same panel without duplicating magic numbers
+#define PANEL_X 10
+#define PANEL_Y 10
+#define PANEL_W 340
+#define PANEL_H 466
+
+// symbol dropdown: fixed-size pool of row buttons, paged rather than
+// scrolled, so the object count stays constant no matter how many
+// symbols are in Market Watch
+#define SYM_VISIBLE_ROWS 10
+#define SYM_ROW_H        18
+#define SYM_HEADER_H     20
+
 //--------------------------------------------------------------------
 // OBJECT NAME HELPERS
 //--------------------------------------------------------------------
 string N(string s){ return PFX+s; }
+
+// MQL5 string literals do NOT support \uXXXX Unicode escapes (only \n \t \r
+// \\ \' \"), so "\u25B8" etc. print as the literal 6 characters, not the
+// glyph. ShortToString() builds the actual character from its Unicode code
+// point instead - use U(0x25B8) wherever a \u escape was being relied on.
+string U(int code){ return ShortToString((short)code); }
 
 string LineEntry(){ return N("LineEntry"); }
 string LineSL()   { return N("LineSL");    }
@@ -114,6 +150,10 @@ string BtnBuyLimit()  { return N("BtnBuyLimit");  }
 string BtnSellLimit() { return N("BtnSellLimit"); }
 string BtnSend()      { return N("BtnSend");      }
 string BtnCancel()    { return N("BtnCancel");    }
+
+string BtnSymbol()          { return N("BtnSymbol");  }
+string SymListBg()          { return N("SymListBg");  }
+string SymListRow(int slot) { return N("SymListRow_"+IntegerToString(slot)); }
 
 //--------------------------------------------------------------------
 // GENERIC OBJECT CREATION HELPERS
@@ -343,6 +383,102 @@ void   SetEditVal(string name,double v,int digits) { ObjectSetString(0,name,OBJP
 void   SetEditText(string name,string s) { ObjectSetString(0,name,OBJPROP_TEXT,s); }
 
 //--------------------------------------------------------------------
+// SYMBOL DROPDOWN (change instrument from the Market Watch list)
+//--------------------------------------------------------------------
+// Pulls the symbol list straight from Market Watch (SymbolsTotal(true) /
+// SymbolName(i,true) only return symbols the user has actually added
+// there), sorted alphabetically. Popup is paged rather than scrolled -
+// SYM_VISIBLE_ROWS row-button objects are created once and their
+// text/color get refreshed on each page turn, so the object count stays
+// constant no matter how big the watchlist is.
+void LoadWatchlist()
+  {
+   g_wlCount = SymbolsTotal(true);
+   ArrayResize(g_wlSymbols,g_wlCount);
+   for(int i=0;i<g_wlCount;i++)
+      g_wlSymbols[i] = SymbolName(i,true);
+
+   for(int i=0;i<g_wlCount-1;i++)
+      for(int j=i+1;j<g_wlCount;j++)
+         if(g_wlSymbols[j]<g_wlSymbols[i])
+           {
+            string t = g_wlSymbols[i];
+            g_wlSymbols[i] = g_wlSymbols[j];
+            g_wlSymbols[j] = t;
+           }
+  }
+
+void DeleteSymbolListObjects()
+  {
+   ObjectDelete(0,SymListBg());
+   ObjectDelete(0,N("SymListHeader"));
+   ObjectDelete(0,N("BtnSymUp"));
+   ObjectDelete(0,N("BtnSymDown"));
+   for(int i=0;i<SYM_VISIBLE_ROWS;i++)
+      ObjectDelete(0,SymListRow(i));
+  }
+
+// re-paints the current page of the popup without recreating objects
+void RefreshSymbolListRows()
+  {
+   for(int slot=0;slot<SYM_VISIBLE_ROWS;slot++)
+     {
+      int idx = g_symListOffset+slot;
+      string sym = (idx<g_wlCount) ? g_wlSymbols[idx] : "";
+      bool isCurrent = (sym==_Symbol);
+      ObjectSetString(0,SymListRow(slot),OBJPROP_TEXT, (sym=="") ? "" : (isCurrent ? (U(0x25B8)+" "+sym) : sym));
+      ObjectSetInteger(0,SymListRow(slot),OBJPROP_BGCOLOR, isCurrent ? clrDarkGreen : C'40,40,40');
+     }
+   int shown = MathMin(g_symListOffset+SYM_VISIBLE_ROWS,g_wlCount);
+   ObjectSetString(0,N("SymListHeader"),OBJPROP_TEXT,
+      StringFormat("Symbols %d-%d of %d",(g_wlCount>0?g_symListOffset+1:0),shown,g_wlCount));
+   ChartRedraw(0);
+  }
+
+void BuildSymbolListObjects()
+  {
+   int listX = PANEL_X+10;
+   int listY0 = PANEL_Y+27+22+2;              // just under the symbol button
+   int listW  = PANEL_W-20;
+   int listH  = SYM_HEADER_H + SYM_VISIBLE_ROWS*SYM_ROW_H + 6;
+
+   CreateRect(SymListBg(),listX,listY0,listW,listH,C'15,15,15',clrDimGray);
+   CreateLabel(N("SymListHeader"),listX+6,listY0+4,"Symbols",clrSilver,8);
+   CreateButton(N("BtnSymUp"),  listX+listW-46,listY0+1,20,18,U(0x25B2),clrSteelBlue,clrWhite);
+   CreateButton(N("BtnSymDown"),listX+listW-24,listY0+1,20,18,U(0x25BC),clrSteelBlue,clrWhite);
+
+   for(int slot=0;slot<SYM_VISIBLE_ROWS;slot++)
+     {
+      int ry = listY0+SYM_HEADER_H+2+slot*SYM_ROW_H;
+      CreateButton(SymListRow(slot),listX+4,ry,listW-8,SYM_ROW_H-2,"",C'40,40,40',clrWhite);
+     }
+
+   RefreshSymbolListRows();
+  }
+
+void OpenSymbolList()
+  {
+   LoadWatchlist();
+   if(g_wlCount==0)
+     {
+      Alert("Market Watch is empty - add some symbols to it first.");
+      return;
+     }
+   g_symListOffset = 0;
+   BuildSymbolListObjects();
+   g_symListOpen = true;
+   ChartRedraw(0);
+  }
+
+void CloseSymbolList()
+  {
+   if(!g_symListOpen) return;
+   DeleteSymbolListObjects();
+   g_symListOpen = false;
+   ChartRedraw(0);
+  }
+
+//--------------------------------------------------------------------
 // PANEL BUILD
 //--------------------------------------------------------------------
 // MT5 draws foreground objects in creation order (ZORDER only affects
@@ -355,6 +491,7 @@ void DeletePanelObjects()
   {
    ObjectDelete(0,N("BG"));
    ObjectDelete(0,N("Title"));
+   ObjectDelete(0,BtnSymbol());
    ObjectDelete(0,N("LblBidAsk"));
    ObjectDelete(0,BtnRiskMode());
    ObjectDelete(0,EditRisk());
@@ -379,6 +516,7 @@ void DeletePanelObjects()
 
 void RaisePanelToFront()
   {
+   CloseSymbolList();         // it would otherwise get painted UNDER the rebuilt panel
    DeletePanelObjects();
    BuildPanel();              // recreated last -> paints on top of the lines
    RefreshEdits();
@@ -392,13 +530,16 @@ void BuildPanel()
   {
    color panelBg = C'20,22,30';
    color panelBorder = clrDimGray;
-   int px=10, py=10, pw=340, ph=430;
+   int px=PANEL_X, py=PANEL_Y, pw=PANEL_W, ph=PANEL_H;
 
    CreateRect(N("BG"),px,py,pw,ph,panelBg,panelBorder);
    CreateLabel(N("Title"),px+10,py+7,"Position Sizer (Sverfund)",clrWhite,11,"Arial Bold");
-   CreateLabel(N("LblBidAsk"),px+10,py+25,"Bid --   Ask --",clrSilver,8);
 
-   int rowY = py+46;
+   // click to open/close the Market Watch symbol dropdown (see OpenSymbolList)
+   CreateButton(BtnSymbol(),px+10,py+27,pw-20,22,_Symbol+"   "+U(0x25BC),clrDarkSlateGray,clrWhite);
+   CreateLabel(N("LblBidAsk"),px+10,py+27+22+4,"Bid --   Ask --",clrSilver,8);
+
+   int rowY = py+74;
    // Risk mode button + value edit
    CreateButton(BtnRiskMode(),px+10,rowY,140,24,"Risk: "+RiskModeLabel(g_riskMode),clrSteelBlue,clrWhite);
    CreateEdit(EditRisk(),px+158,rowY,160,24,DoubleToString(g_riskValue,2));
@@ -528,7 +669,7 @@ void UpdateBidAskLabel()
    double ask = SymbolInfoDouble(_Symbol,SYMBOL_ASK);
    int    d   = DigitsVal();
    double spreadPts = (PointVal()>0) ? (ask-bid)/PointVal() : 0;
-   string txt = StringFormat("Bid %s   Ask %s   Spread %.1f pt",
+   string txt = StringFormat("Bid %s   Ask %s   Spread %.1f pts",
                 DoubleToString(bid,d),DoubleToString(ask,d),spreadPts);
    ObjectSetString(0,N("LblBidAsk"),OBJPROP_TEXT,txt);
   }
@@ -795,6 +936,7 @@ void SendOrder()
 
 void ResetPanel()
   {
+   CloseSymbolList();
    g_orderType = -1;
    RemoveLines();          // lines only appear again once a type is picked
    HighlightOrderTypeButtons();
@@ -809,27 +951,103 @@ void ResetPanel()
   }
 
 //--------------------------------------------------------------------
+// STATE PERSISTENCE ACROSS TIMEFRAME / SYMBOL / INPUT-CHANGE REINIT
+//--------------------------------------------------------------------
+// MT5 tears the EA all the way down (OnDeinit) and immediately builds it
+// back up (OnInit) whenever you switch the chart's timeframe or symbol,
+// or change an input - that's what was wiping the panel back to defaults
+// and dropping the lines. We stash the live state into terminal global
+// variables right before teardown (only for reasons where the SAME EA is
+// about to be reinitialized on the SAME chart) and restore it on the next
+// OnInit(), so the panel/lines survive a timeframe switch and only reset
+// when you actually press CANCEL.
+string GVKey(string s)
+  {
+   return PFX+"GV_"+IntegerToString((long)ChartID())+"_"+_Symbol+"_"+s;
+  }
+
+void SaveState()
+  {
+   GlobalVariableSet(GVKey("orderType"), (double)g_orderType);
+   GlobalVariableSet(GVKey("riskMode"),  (double)g_riskMode);
+   GlobalVariableSet(GVKey("riskValue"), g_riskValue);
+   GlobalVariableSet(GVKey("rrr"),       g_rrr);
+   GlobalVariableSet(GVKey("entry"),     g_entryPrice);
+   GlobalVariableSet(GVKey("sl"),        g_slPrice);
+   GlobalVariableSet(GVKey("tp"),        g_tpPrice);
+   GlobalVariableSet(GVKey("linesExist"),g_linesExist ? 1.0 : 0.0);
+  }
+
+void ClearState()
+  {
+   GlobalVariableDel(GVKey("orderType"));
+   GlobalVariableDel(GVKey("riskMode"));
+   GlobalVariableDel(GVKey("riskValue"));
+   GlobalVariableDel(GVKey("rrr"));
+   GlobalVariableDel(GVKey("entry"));
+   GlobalVariableDel(GVKey("sl"));
+   GlobalVariableDel(GVKey("tp"));
+   GlobalVariableDel(GVKey("linesExist"));
+  }
+
+// Returns true if a saved state for THIS chart+symbol was found and
+// loaded into the globals. Consumes (deletes) the saved copy once read,
+// since a fresh one gets written on the very next teardown anyway.
+bool LoadState()
+  {
+   if(!GlobalVariableCheck(GVKey("orderType"))) return false;
+
+   g_orderType  = (int)GlobalVariableGet(GVKey("orderType"));
+   g_riskMode   = (RiskMode)(int)GlobalVariableGet(GVKey("riskMode"));
+   g_riskValue  = GlobalVariableGet(GVKey("riskValue"));
+   g_rrr        = GlobalVariableGet(GVKey("rrr"));
+   g_entryPrice = GlobalVariableGet(GVKey("entry"));
+   g_slPrice    = GlobalVariableGet(GVKey("sl"));
+   g_tpPrice    = GlobalVariableGet(GVKey("tp"));
+   g_linesExist = (GlobalVariableGet(GVKey("linesExist"))>0.5);
+
+   ClearState();
+   return true;
+  }
+
+//--------------------------------------------------------------------
 // EXPERT LIFECYCLE
 //--------------------------------------------------------------------
 int OnInit()
   {
-   g_riskMode  = RISK_AMOUNT;
-   g_riskValue = InpDefaultRiskValue;
-   g_rrr       = InpDefaultRRR;
-   g_orderType = -1;
-   g_linesExist = false;
+   bool restored = LoadState();
 
-   double price = SymbolInfoDouble(_Symbol,SYMBOL_BID);
-   if(price<=0) price = SymbolInfoDouble(_Symbol,SYMBOL_ASK);
-   g_entryPrice = price;
-   g_slPrice    = price - InpDefaultSLPoints*PointVal();
-   RecalcTPFromRRR();
+   if(!restored)
+     {
+      g_riskMode  = RISK_AMOUNT;
+      g_riskValue = InpDefaultRiskValue;
+      g_rrr       = InpDefaultRRR;
+      g_orderType = -1;
+      g_linesExist = false;
 
-   BuildPanel();          // no lines yet - only appear once you pick a type
+      double price = SymbolInfoDouble(_Symbol,SYMBOL_BID);
+      if(price<=0) price = SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+      g_entryPrice = price;
+      g_slPrice    = price - InpDefaultSLPoints*PointVal();
+      RecalcTPFromRRR();
+     }
+
+   // whether we need to rebuild the Entry/SL/TP lines after the panel is up
+   bool needLines = (restored && g_linesExist && g_orderType!=-1);
+   g_linesExist = false;   // EnsureLinesExist() below (re)creates + flags them properly
+
+   BuildPanel();           // no lines yet here - EnsureLinesExist() repaints the panel on top of them
    HighlightOrderTypeButtons();
    RefreshEdits();
    UpdateBidAskLabel();
    UpdateInfoLabel();
+
+   if(needLines)
+     {
+      EnsureLinesExist();  // recreates Entry/SL/TP lines at the restored prices
+      SyncAll();
+     }
+
    ChartRedraw(0);
 
    // Object drag competes with chart-drag-to-scroll; turning scroll off
@@ -841,6 +1059,18 @@ int OnInit()
 
 void OnDeinit(const int reason)
   {
+   // REASON_CHARTCHANGE = timeframe or symbol switch, REASON_PARAMETERS =
+   // an input was changed, REASON_RECOMPILE = code recompiled - all three
+   // tear down and immediately reinit the SAME EA on the SAME chart, so
+   // stash the live state to restore in the next OnInit(). Any other
+   // reason (removed from chart, chart closed, terminal shutdown, ...)
+   // means the EA is really going away, so drop the saved state instead
+   // of leaving stale global variables behind.
+   if(reason==REASON_CHARTCHANGE || reason==REASON_PARAMETERS || reason==REASON_RECOMPILE)
+      SaveState();
+   else
+      ClearState();
+
    ObjectsDeleteAll(0,PFX);
    ChartSetInteger(0,CHART_MOUSE_SCROLL,true);   // restore normal chart behavior
    ChartRedraw(0);
@@ -848,33 +1078,43 @@ void OnDeinit(const int reason)
 
 void OnTick()
   {
-   // keep Bid/Ask and the $ / % readouts current
+   // Market orders: the entry price isn't something you choose, it's
+   // whatever the market gives you when SEND is pressed. So keep the
+   // entry line/price locked to live Ask (buy) or Bid (sell) instead of
+   // letting it sit stale. SL/TP are left where they are; only the entry
+   // - and the RRR/lots figures derived from it - update.
+   //
+   // IMPORTANT: this runs on EVERY tick, unthrottled. It used to live
+   // inside the once-per-second block below, gated on TimeCurrent()
+   // changing - but TimeCurrent() only has whole-second resolution, and
+   // fast symbols routinely deliver several ticks within the same
+   // second. Any tick that landed in an already-seen second was silently
+   // dropped, which is why the entry line only sometimes tracked price.
+   if(g_linesExist && IsMarketType(g_orderType))
+     {
+      double livePrice = IsBuyType(g_orderType)
+                          ? SymbolInfoDouble(_Symbol,SYMBOL_ASK)
+                          : SymbolInfoDouble(_Symbol,SYMBOL_BID);
+      if(livePrice>0 && livePrice!=g_entryPrice)
+        {
+         g_entryPrice = livePrice;
+         OnEntryChanged();   // recalcs RRR from TP, moves the line, refreshes edits/tags
+        }
+     }
+
+   // Everything else (Bid/Ask label, info label, pending-order re-clamp)
+   // is cheaper to skip and doesn't need per-tick precision, so it stays
+   // throttled to roughly once per second to keep redraw load down.
    static datetime lastRefresh=0;
    if(TimeCurrent()!=lastRefresh)
      {
       lastRefresh = TimeCurrent();
 
-      // Market orders: the entry price isn't something you choose, it's
-      // whatever the market gives you when SEND is pressed. So keep the
-      // entry line/price locked to live Ask (buy) or Bid (sell) instead
-      // of letting it sit stale. SL/TP are left where they are; only
-      // the entry - and the RRR/lots figures derived from it - update.
-      if(g_linesExist && IsMarketType(g_orderType))
-        {
-         double livePrice = IsBuyType(g_orderType)
-                             ? SymbolInfoDouble(_Symbol,SYMBOL_ASK)
-                             : SymbolInfoDouble(_Symbol,SYMBOL_BID);
-         if(livePrice>0)
-           {
-            g_entryPrice = livePrice;
-            OnEntryChanged();   // recalcs RRR from TP, moves the line, refreshes edits/tags
-           }
-        }
       // Pending orders: the entry you set can become invalid if price
       // moves through it (e.g. a Buy Stop placed above Ask, then price
-      // rallies past it). Re-clamp every tick so the line/edit box never
-      // sits on the wrong side of the market.
-      else if(g_linesExist && g_orderType!=-1 && ClampEntryForOrderType())
+      // rallies past it). Re-clamp so the line/edit box never sits on
+      // the wrong side of the market.
+      if(g_linesExist && g_orderType!=-1 && !IsMarketType(g_orderType) && ClampEntryForOrderType())
         {
          RecalcRRRFromTP();
          SyncAll();
@@ -892,6 +1132,26 @@ void OnTick()
 //--------------------------------------------------------------------
 void OnChartEvent(const int id,const long &lparam,const double &dparam,const string &sparam)
   {
+   // Plain click anywhere on the chart (clicks on buttons/edits raise
+   // CHARTEVENT_OBJECT_CLICK instead, so this only fires for "elsewhere")
+   // dismisses the symbol dropdown if it's open.
+   //
+   // MT5 fires this generic CHARTEVENT_CLICK right after CHARTEVENT_OBJECT_CLICK
+   // for the SAME physical click on a button. Without the suppression check
+   // below, clicking BtnSymbol() would open the dropdown in the OBJECT_CLICK
+   // handler and then immediately close it again here, so the popup looked
+   // like it never appeared at all.
+   if(id==CHARTEVENT_CLICK)
+     {
+      if(g_suppressChartClick)
+        {
+         g_suppressChartClick = false;
+         return;
+        }
+      if(g_symListOpen) CloseSymbolList();
+      return;
+     }
+
    // Fired on resize, scroll, zoom, and other geometry changes - including
    // while the market is closed and no ticks are coming in. Without this,
    // the price-tag background rectangles (which are pixel-anchored, unlike
@@ -990,6 +1250,62 @@ void OnChartEvent(const int id,const long &lparam,const double &dparam,const str
          ObjectSetInteger(0,BtnCancel(),OBJPROP_STATE,false);
          ResetPanel();
          return;
+        }
+
+      if(sparam==BtnSymbol())
+        {
+         ObjectSetInteger(0,BtnSymbol(),OBJPROP_STATE,false);
+         if(g_symListOpen)
+            CloseSymbolList();
+         else
+           {
+            OpenSymbolList();
+            // eat the CHARTEVENT_CLICK MT5 fires right after this OBJECT_CLICK
+            // for the same physical click, so it doesn't immediately close
+            // the dropdown we just opened (see the CHARTEVENT_CLICK handler)
+            g_suppressChartClick = true;
+           }
+         return;
+        }
+
+      if(g_symListOpen)
+        {
+         if(sparam==N("BtnSymUp"))
+           {
+            ObjectSetInteger(0,N("BtnSymUp"),OBJPROP_STATE,false);
+            g_symListOffset = MathMax(0,g_symListOffset-SYM_VISIBLE_ROWS);
+            RefreshSymbolListRows();
+            return;
+           }
+         if(sparam==N("BtnSymDown"))
+           {
+            ObjectSetInteger(0,N("BtnSymDown"),OBJPROP_STATE,false);
+            int maxOff = MathMax(0,g_wlCount-SYM_VISIBLE_ROWS);
+            g_symListOffset = MathMin(maxOff,g_symListOffset+SYM_VISIBLE_ROWS);
+            RefreshSymbolListRows();
+            return;
+           }
+         for(int slot=0;slot<SYM_VISIBLE_ROWS;slot++)
+           {
+            if(sparam==SymListRow(slot))
+              {
+               ObjectSetInteger(0,SymListRow(slot),OBJPROP_STATE,false);
+               int idx = g_symListOffset+slot;
+               if(idx<g_wlCount)
+                 {
+                  string newSymbol = g_wlSymbols[idx];
+                  CloseSymbolList();
+                  // switching symbol tears the EA down and rebuilds it
+                  // (REASON_CHARTCHANGE) - OnInit() will correctly reset
+                  // the panel to defaults for the new symbol since the
+                  // saved state is keyed by symbol too.
+                  if(newSymbol!=_Symbol)
+                     ChartSetSymbolPeriod(0,newSymbol,(ENUM_TIMEFRAMES)Period());
+                 }
+               return;
+              }
+           }
+         return;   // click landed inside the open dropdown but on nothing recognized
         }
 
       bool isTypeBtn = (sparam==BtnBuy() || sparam==BtnSell() || sparam==BtnBuyStop() ||
