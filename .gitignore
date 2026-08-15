@@ -1,7 +1,9 @@
 */**/*.csv
+*/**/*.png
 */**/*.html
 */**/__pycache__
 .vscode
 .venv
 *.csv
 *.png
+*.html

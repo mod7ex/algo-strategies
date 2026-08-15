@@ -5,5 +5,7 @@ yfinance
 nbformat
 matplotlib
 seaborn
-hmmlearn
+# hmmlearn
 statsmodels
+pandas-ta-classic
+backtesting
