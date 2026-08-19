@@ -5,5 +5,3 @@
 - Maximal Favorable Excursion (MFE) and Maximal Adverse Excursion (MAE).
 
 ---
-
-GMT + ES_NQ correlation (pair trading)
