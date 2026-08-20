@@ -3,18 +3,20 @@ indicator("Sverfund Pair Spread", overlay=false)
 
 // ── Inputs ─────────────────────────────────────────────
 symbol2  = input.symbol("SAXO:EURUSD", "Pair Symbol (X)")
-window   = input.int(86, "Regression Window (bars)", minval=5)
-z_window = input.int(8, "Z-Score Window (bars)", minval=2)
+window   = input.int(60, "Regression Window (bars)", minval=5)
+z_window = input.int(41, "Z-Score Window (bars)", minval=2)
+z_stop = input.float(4.7, "Stop Z-Score Stop", minval=2)
 useLog   = input.bool(true, "Use Log Prices")
-zThresh  = input.float(2.0, "Entry Z-Score Threshold", minval=0.5, step=0.1)
+zThresh  = input.float(4.0, "Entry Z-Score Threshold", minval=0.5, step=0.1)
 srcY     = input.source(close, "Y Source (current chart)")
+srcX     = input.source(close, "X Source (current chart)")
 
 // ── Symbol Names ───────────────────────────────────────
 tickerY = syminfo.ticker(syminfo.tickerid)
 tickerX = syminfo.ticker(symbol2)
 
 // ── Data ───────────────────────────────────────────────
-srcX_raw = request.security(symbol2, timeframe.period, close, lookahead=barmerge.lookahead_off)
+srcX_raw = request.security(symbol2, timeframe.period, srcX, lookahead=barmerge.lookahead_off)
 
 y = useLog ? math.log(srcY)     : srcY
 x = useLog ? math.log(srcX_raw) : srcX_raw
@@ -47,6 +49,8 @@ plot(zscore, "Z-Score", color=color.blue, linewidth=2)
 hline(0, "Mean", color=color.gray)
 hline(zThresh, "+Threshold", color=color.red, linestyle=hline.style_dashed)
 hline(-zThresh, "-Threshold", color=color.green, linestyle=hline.style_dashed)
+hline(-z_stop, "-Threshold", color=color.gray, linestyle=hline.style_dashed)
+hline(z_stop, "+ Zscore stop", color=color.gray, linestyle=hline.style_dashed)
 hline(1, "+1σ", color=color.gray, linestyle=hline.style_dotted)
 hline(-1, "-1σ", color=color.gray, linestyle=hline.style_dotted)
 
@@ -63,7 +67,3 @@ if barstate.islast
     table.cell(infoTable, 1, 2, str.tostring(zscore, "#.##"), text_color=color.white, bgcolor=color.gray)
     table.cell(infoTable, 0, 3, "Pair",  text_color=color.white, bgcolor=color.gray)
     table.cell(infoTable, 1, 3, tickerY + " / " + tickerX, text_color=color.white, bgcolor=color.gray)
-
-// Pair X/Y ===> 
-//      z < -3 buy X sell beta*Y
-//      z > 3  sell X buy beta*Y
