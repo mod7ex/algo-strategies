@@ -8,21 +8,21 @@ from utils import get_data, backtest_stats, run_range_breakout, get_time_to_root
 
 df = get_data(Path(__file__).resolve().parent / "../data/XAUUSD_M5_01-01-2025_to_24-08-2026.csv")
 
-df = df.tail(10000)
+# df = df.tail(10000)
 
 time_to_roots = get_time_to_roots(df)
 
 # --------------------------------------------------------------------------------
 
-# range_lengths = [i for i in range(1, 26)]
-# rrrs = [u for u in range(1, 4)]
-# candle_time = df.head(300).index.strftime("%H:%M").unique().tolist()
-# max_look_aheads = [None] + [i for i in range(12, 73)]
+range_lengths = [i for i in range(1, 26)]
+rrrs = [u for u in range(1, 4)]
+candle_time = df.head(300).index.strftime("%H:%M").unique().tolist()
+max_look_aheads = [i for i in range(12, 73)]
 
-range_lengths = [5, 12]
-rrrs = [2]
-candle_time = df.head(5).index.strftime("%H:%M").unique().tolist()
-max_look_aheads = [50, 20]
+# range_lengths = [5, 12]
+# rrrs = [2]
+# candle_time = df.head(5).index.strftime("%H:%M").unique().tolist()
+# max_look_aheads = [50, 20]
 
 high = df["High"].to_numpy()
 low = df["Low"].to_numpy()

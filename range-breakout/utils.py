@@ -182,7 +182,7 @@ def backtest_stats(result_df):
         "Max Balance DD": round(max_balance_dd, 2),
         "Max Balance DD %": round(max_balance_dd_pct, 2),
 
-        "Win rate": round(100 * _winning_trades/(_winning_trades + _losing_trades), 2),
+        "Win rate %": round(100 * _winning_trades/(_winning_trades + _losing_trades), 2),
 
         "Winning trades": int(_winning_trades),
         "Losing trades": int(_losing_trades),
