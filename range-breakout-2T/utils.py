@@ -1,27 +1,16 @@
 import pandas as pd
 import numpy as np
-from bisect import bisect_right
 from collections import defaultdict
 
 INITIAL_BALANCE = 1000
 RISK_PER_TRADE = 10
 
-def find_adjacents(L, x):
-    return bisect_right(L, x)
-
-def get_time_to_roots(df, start_time=None, end_time=None):
+def get_time_to_roots(df):
     times_arr = df.index.strftime("%H:%M").to_numpy()
-
-    if start_time is None:
-        start_time=""
-
-    if end_time is None:
-        end_time="30:00"
 
     time_to_roots = defaultdict(list)
     for i, t in enumerate(times_arr):
-        if start_time <= t <= end_time:
-            time_to_roots[t].append(i)
+        time_to_roots[t].append(i)
 
     return {t: np.array(idxs) for t, idxs in time_to_roots.items()}
 
@@ -47,54 +36,77 @@ def simulate_trade(
     range_high,
     range_low,
     rrr,
-    max_lookahead=None,
-    eod_idx=None
+    max_lookahead,
 ):
     range_delta = range_high - range_low
 
-    entry = None
-    sl = None
-    tp = None
+    l_entry = l_sl = l_tp = None
+    l_status = None  # None | 'open' | 'win' | 'loss'
+
+    s_entry = s_sl = s_tp = None
+    s_status = None
 
     end_i = len(high)
-
-    if eod_idx is not None:
-        if start_i in eod_idx: return None
-        end_i = find_adjacents(eod_idx, start_i)
-
     if max_lookahead is not None:
         end_i = min(end_i, start_i + max_lookahead)
 
     for i in range(start_i, end_i):
-        if entry is None:
-            if high[i] >= range_high and low[i] > range_low:
-                entry = range_high
-                sl = range_low
-                tp = entry + rrr*range_delta
+        _high, _low = high[i], low[i]
 
-            elif low[i] <= range_low and high[i] < range_high:
-                entry = range_low
-                sl = range_high
-                tp = entry - rrr*range_delta
+        if _low <= range_low and _high >= range_high: return -2
 
-            elif low[i] > range_low and high[i] < range_high: continue
+        # --- entries (each side triggers at most once) ---
+        if l_status is None and _high >= range_high:
+            l_entry = range_high
+            l_sl = range_low
+            l_tp = l_entry + rrr * range_delta
+            l_status = 'open'
 
-            else: return -1
+        if s_status is None and _low <= range_low:
+            s_entry = range_low
+            s_sl = range_high
+            s_tp = s_entry - rrr * range_delta
+            s_status = 'open'
 
-        is_long = entry > sl
+        # --- exits (checked same bar as entry too, in case of a big move) ---
+        if l_status == 'open':
+            hit_sl = _low <= l_sl
+            hit_tp = _high >= l_tp
+            if hit_sl and hit_tp:
+                # same-candle SL+TP: order is unknowable from OHLC alone.
+                # conservative assumption: stop-loss hit first.
+                l_status = 'loss'
+            elif hit_sl:
+                l_status = 'loss'
+            elif hit_tp:
+                l_status = 'win'
 
-        if is_long:
-            if low[i] <= sl: return -1
-            if high[i] > tp: return rrr
-        else:
-            if high[i] >= sl: return -1
-            if tp > low[i]: return rrr
+        if s_status == 'open':
+            hit_sl = _high >= s_sl
+            hit_tp = _low <= s_tp
+            if hit_sl and hit_tp:
+                s_status = 'loss'  # same conservative assumption
+            elif hit_sl:
+                s_status = 'loss'
+            elif hit_tp:
+                s_status = 'win'
 
-    if entry is None: return None # no trade was triggered within the lookahead window
+        # once both sides are triggered and resolved, nothing more can change
+        if l_status in ('win', 'loss') and s_status in ('win', 'loss'): break
 
-    # loop exhausted (either max_lookahead or end of data)
+    if l_status is None and s_status is None: return None  # neither side ever triggered
+
     exit_price = close[end_i - 1]
-    outcome_r = (exit_price - entry) / range_delta if (tp > sl) else (entry - exit_price) / range_delta
+    outcome_r = 0.0
+
+    if l_status == 'win': outcome_r += rrr
+    elif l_status == 'loss': outcome_r += -1
+    elif l_status == 'open': outcome_r += (exit_price - l_entry) / range_delta
+
+    if s_status == 'win': outcome_r += rrr
+    elif s_status == 'loss': outcome_r += -1
+    elif s_status == 'open': outcome_r += (s_entry - exit_price) / range_delta
+
     return outcome_r
 
 def run_range_breakout(
@@ -103,7 +115,6 @@ def run_range_breakout(
     range_length,
     rrr,
     max_lookahead,
-    eod_idx,
     balance=INITIAL_BALANCE,
     risk_per_trade=RISK_PER_TRADE,
 ):
@@ -129,7 +140,6 @@ def run_range_breakout(
             range_low,
             rrr,
             max_lookahead=max_lookahead,
-            eod_idx=eod_idx,
         )
 
         if outcome is not None:
@@ -144,7 +154,9 @@ def run_range_breakout(
         },
         index=df.index,
     )
+
 # --------------------------------------------------------------------------------
+
 def backtest_stats(result_df):
     result_df = result_df.copy()
 
@@ -199,7 +211,7 @@ def backtest_stats(result_df):
         "Max Balance DD": round(max_balance_dd, 2),
         "Max Balance DD %": round(max_balance_dd_pct, 2),
 
-        "Win rate": round(100 * _winning_trades/(_winning_trades + _losing_trades), 2),
+        "Win rate %": round(100 * _winning_trades/(_winning_trades + _losing_trades), 2),
 
         "Winning trades": int(_winning_trades),
         "Losing trades": int(_losing_trades),
@@ -208,3 +220,7 @@ def backtest_stats(result_df):
         "Max win streak": int(win_streaks.max()),
         "Max loss streak": int(loss_streaks.max())
     }
+
+def print_stats(d):
+    for key, value in d.items():
+        print(f"{key}: {value}")

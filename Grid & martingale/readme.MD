@@ -1,0 +1,1 @@
+range of n candles that after breakout quickly goes to high+R or low-R =========> for martingale ZR

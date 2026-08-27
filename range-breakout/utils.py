@@ -127,7 +127,9 @@ def run_range_breakout(
         },
         index=df.index,
     )
+
 # --------------------------------------------------------------------------------
+
 def backtest_stats(result_df):
     result_df = result_df.copy()
 
@@ -191,3 +193,7 @@ def backtest_stats(result_df):
         "Max win streak": int(win_streaks.max()),
         "Max loss streak": int(loss_streaks.max())
     }
+
+def print_stats(d):
+    for key, value in d.items():
+        print(f"{key}: {value}")
