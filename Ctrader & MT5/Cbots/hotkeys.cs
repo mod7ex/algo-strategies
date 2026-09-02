@@ -1,77 +1,3 @@
-// =====================================================================
-//  HotkeyTraderAutoTPSL.cs
-//  cTrader (cAlgo) cBot port of HotkeyTrader_AutoTPSL.mq5 (MT5 EA)
-//
-//  Combines:
-//   - A hotkey trading panel (Long / Short / Flat / RiskFree / Hedge)
-//   - An automatic Take Profit / Stop Loss manager with SL Cover
-//   - A single ON/OFF toggle for the Auto TP/SL engine
-//
-//  PORTING NOTES (read before using on a live account):
-//
-//  1. No "magic number" concept exists in cTrader. The MT5 magic
-//     number is replaced by the Position/Order `Label` string:
-//       - HotkeyLabel is stamped on new orders opened by the panel.
-//       - TpslLabelFilter is the equivalent of InpTPSLMagicFilter
-//         (blank = manage every open position, any symbol).
-//
-//  2. cTrader has no per-order "slippage in points" parameter exposed
-//     via ExecuteMarketOrder in the same way MT5 does - execution
-//     slippage is handled by the broker/platform. There is nothing to
-//     configure here.
-//
-//  3. A cBot instance is NOT torn down when you change the chart's
-//     symbol or timeframe the way an MT5 EA is (MT5's OnDeinit/OnInit
-//     dance). Because of that, the GlobalVariableTemp() persistence
-//     trick from the MT5 version is unnecessary here - g_enabled and
-//     g_lotSize simply live as normal instance fields for the life of
-//     the cBot run.
-//
-//  4. Money-based TP/SL sizing (ValueMode.Money / ValueMode.Percent)
-//     uses Symbol.TickValue and Symbol.TickSize to convert a monetary
-//     amount into a price distance, mirroring the MT5
-//     SYMBOL_TRADE_TICK_VALUE / SYMBOL_TRADE_TICK_SIZE approach.
-//     cTrader's documentation is notoriously thin on whether
-//     TickValue is already normalised for a specific volume - TEST
-//     this thoroughly on a demo account (compare the SL/TP price the
-//     bot sets against the money amount you expect) before trusting
-//     it with real funds. Pip-based sizing (ValueMode.Pips) does not
-//     depend on this and is safe to use as-is.
-//
-//  5. cTrader positions are typically not subject to MT5-style
-//     "minimum stop distance" (SYMBOL_TRADE_STOPS_LEVEL) restrictions
-//     since most cTrader brokers are STP/ECN, so that clamp was
-//     dropped. If your broker rejects a ModifyPosition/order because
-//     the SL/TP is too close to price, the failure is logged via
-//     Print() and the TradeResult.Error.
-//
-//  5b. SL/TP updates use the newer ModifyPosition(..., ProtectionType)
-//      overload with ProtectionType.Absolute. Multiple cTrader forum
-//      threads report this overload crashing with a TypeLoadException
-//      when a cBot runs on cTrader's cloud/VPS hosting - it's used here
-//      because this bot is only ever run locally in the terminal. If
-//      you later move this bot to cTrader Cloud, drop the
-//      ProtectionType argument and go back to the 3-arg overload.
-//
-//  6. UI is built with the native cAlgo Controls API (Grid /
-//     StackPanel / Border / Button / TextBlock / TextBox) instead of
-//     manually managed chart objects - this is the idiomatic cTrader
-//     approach and needs far less bookkeeping code than the MQL5
-//     ObjectCreate/ObjectSet plumbing.
-//
-//  7. Hotkeys use Chart.KeyDown. cTrader will not raise this event for
-//     keys/keystrokes it already treats as native hotkeys.
-//
-//  8. The panel is movable with the mouse via cTrader's native
-//     "chart area draggable control" (Chart.Draggables.Add()). Rather
-//     than hand-rolling MouseDown/MouseMove math against the panel's
-//     Margin (fragile, and easy to fight with the panel's own button
-//     clicks), the whole panel Border is set as the Child of a
-//     ChartDraggable, which is the idiomatic/supported way to get a
-//     draggable floating panel in cAlgo. The panel can be dragged by
-//     clicking and holding anywhere on it (not just a title bar).
-// =====================================================================
-
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -293,14 +219,16 @@ namespace cAlgo.Robots
             return Positions.Where(p => p.SymbolName == SymbolName);
         }
 
-        private void GetPositionStats(out int count, out double lots)
+        private void GetPositionStats(out int count, out double lots, out double pnl)
         {
             count = 0;
             lots = 0;
+            pnl = 0;
             foreach (var p in CurrentSymbolPositions())
             {
                 count++;
                 lots += VolumeToLots(Symbol, p.VolumeInUnits);
+                pnl += p.NetProfit; // same net P&L figure cTrader shows for the position
             }
         }
 
@@ -863,9 +791,15 @@ namespace cAlgo.Robots
         {
             int count;
             double lots;
-            GetPositionStats(out count, out lots);
+            double pnl;
+            GetPositionStats(out count, out lots, out pnl);
 
-            if (_posLabel != null) _posLabel.Text = string.Format("Open positions: {0}", count);
+            if (_posLabel != null)
+            {
+                _posLabel.Text = string.Format("Open positions: {0} (PnL: {1}{2:0.00})",
+                    count, pnl >= 0 ? "+" : "-", Math.Abs(pnl));
+                _posLabel.ForegroundColor = count == 0 ? Color.Silver : (pnl >= 0 ? Color.LightGreen : Color.Tomato);
+            }
             if (_maxLabel != null) _maxLabel.Text = MaxOpenLotsText();
             if (_statusLabel != null) _statusLabel.Text = _status;
         }
